@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Build artifacts
+surveycto-skill.zip
+surveycto-skill-dev.zip
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

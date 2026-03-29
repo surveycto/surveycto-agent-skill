@@ -1,0 +1,27 @@
+name: Build dev zip
+
+on:
+  push:
+    branches: [develop]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build zip
+        run: |
+          zip -r surveycto-skill-dev.zip . \
+            -x '.git/*' \
+            -x '.github/*' \
+            -x '.gitignore' \
+            -x 'README.md' \
+            -x 'LICENSE' \
+            -x '*.zip'
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: surveycto-skill-dev
+          path: surveycto-skill-dev.zip
