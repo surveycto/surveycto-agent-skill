@@ -13,11 +13,19 @@ An [Agent Skill](https://agentskills.io) that enables AI agents to design, edit,
 | `references/data-explorer-reference.md` | Data Explorer workbook definition reference |
 | `assets/xlsform-template.xlsx` | XLSForm template with headers, formatting, and help worksheets |
 
+## Download
+
+**Latest stable release (always up to date):**
+
+[surveycto-skill.zip](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip)
+
+This URL always points to the most recent release. You can also browse all releases on the [releases page](../../releases).
+
 ## Installation
 
 ### Claude.ai / Claude Cowork
 
-1. Download `surveycto-skill.zip` from the [latest release](../../releases/latest)
+1. Download [surveycto-skill.zip](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip)
 2. Open **Settings** > **Features** (or the **Customize** page)
 3. Upload the zip file
 
@@ -56,13 +64,30 @@ Once installed, the skill activates automatically when you:
 
 This repo uses a `develop` → `main` branching model:
 
-- **`develop`** — active development; pushes here produce a `surveycto-skill-dev.zip` artifact
-- **`main`** — stable releases; pushes here produce a `surveycto-skill.zip` release artifact
+- **`develop`** — active development; pushes here produce a `surveycto-skill-dev.zip` build artifact
+- **`main`** — stable releases; pushes here create a GitHub Release with `surveycto-skill.zip` attached
+
+### Versioning
+
+The skill version is stored in the `metadata.version` field in `SKILL.md` frontmatter:
+
+```yaml
+metadata:
+  author: SurveyCTO
+  version: "1.0"
+```
+
+When merging `develop` into `main`, bump this version number first. The release workflow reads it to create the Git tag and GitHub Release name (e.g., version `"1.1"` produces tag `v1.1` and release `v1.1`).
+
+Use [semantic versioning](https://semver.org):
+- **Patch** (e.g., 1.0 → 1.0.1): Fix incorrect information, typos, or clarify existing guidance
+- **Minor** (e.g., 1.0 → 1.1): Add new content (new reference sections, new patterns, template updates)
+- **Major** (e.g., 1.1 → 2.0): Structural changes that may affect how agents use the skill
 
 ### Building the zip locally
 
 ```bash
-zip -r surveycto-skill.zip . -x '.*' -x 'README.md' -x '.github/*'
+zip -r surveycto-skill.zip . -x '.*' -x '.git/*' -x '.github/*' -x 'README.md' -x 'LICENSE' -x '*.zip'
 ```
 
 ### Making changes
@@ -70,7 +95,7 @@ zip -r surveycto-skill.zip . -x '.*' -x 'README.md' -x '.github/*'
 1. Create a feature branch from `develop`
 2. Make your changes
 3. Open a PR to `develop`
-4. Once merged and tested, merge `develop` into `main` to create a release
+4. Once merged and tested, bump the version in `SKILL.md` and merge `develop` into `main` to create a release
 
 ## Links
 
