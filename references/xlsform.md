@@ -1,3 +1,10 @@
+<!--
+  PRIMER: xlsform
+  STATUS: V1 — slated for regeneration from docs.surveycto.com via the prompt
+  in README.md ("Regenerating primers"). Keep XLSForm mechanics here; expression
+  language details belong in expressions.md.
+-->
+
 # XLSForm Reference
 
 A SurveyCTO form definition is an XLSX workbook with three worksheets: `survey`, `choices`, and `settings`. This reference covers all worksheets, columns, and field types.

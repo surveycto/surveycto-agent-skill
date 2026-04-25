@@ -1,3 +1,10 @@
+<!--
+  PRIMER: expressions
+  STATUS: V1 — slated for regeneration from docs.surveycto.com via the prompt
+  in README.md ("Regenerating primers"). Keep expression-language semantics
+  here; XLSForm column placement belongs in xlsform.md.
+-->
+
 # SurveyCTO Expressions Reference
 
 This is the bundled reference for all SurveyCTO expression operators and functions. For the most current version, see the live documentation: [Using expressions in your forms](https://docs.surveycto.com/02-designing-forms/01-core-concepts/09.expressions.html).
