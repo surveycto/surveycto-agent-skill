@@ -22,7 +22,7 @@ The five primers in `references/` are the canonical bundled knowledge set. They 
 
 The skill recommends the **SurveyCTO MCP server** (public, no auth, Streamable HTTP) when it's available. It provides:
 
-- **XLSForm file tools** — `start_xlsform_session`, `get_xlsform_summary`, `xls_get_rows`, `xls_get_row`, `xls_apply_patches`, `export_xlsform`, `end_xlsform_session`. SurveyCTO-aware parsing, atomic patches with conflict detection, formula recalculation on export, and formatting preservation.
+- **XLSForm file tools** — `start_xlsform_session`, `get_xlsform_summary`, `xls_get_rows`, `xls_get_row`, `xls_apply_patches`, `export_xlsform`, `end_xlsform_session`. SurveyCTO-aware parsing, atomic patches with conflict detection, common column-alias normalization, formula recalculation on export, and formatting preservation. Explicit session cleanup is available but normal workflows can let sessions expire by TTL.
 - **Knowledge-base tools** — `kb_search` over indexed SurveyCTO docs/support content; `get_surveycto_primer` for these primers.
 - **Discovery** — `get_surveycto_mcp_capabilities` for the canonical tool list, recommended workflows, concurrency contract, and primer topic inventory.
 
@@ -247,6 +247,12 @@ The primer must cover, comprehensively:
   calculation, default, repeat_count, choice_filter, appearance, read only,
   disabled, label/hint:Language variants, media columns, etc.) — what each
   one does and how to use it. Use a table.
+- Label, hint, note, constraint-message, and required-message formatting:
+  SurveyCTO does not render Markdown in these strings. Tell agents to prefer
+  plain text; use simple inline HTML only when formatting is genuinely helpful;
+  never use full HTML documents; and note that hints should remain plain
+  because they are already client-styled helper text. Keep this aligned with
+  `references/xlsform.md#label-hint-and-message-formatting`.
 - All XLSForm field types SurveyCTO supports — text, integer, decimal,
   select_one, select_multiple, date/time/datetime, geopoint/geotrace/geoshape,
   image/audio/video/file, barcode, calculate, note, acknowledge, deviceid,

@@ -35,11 +35,13 @@ For a high-level orientation, read [`references/overview.md`](references/overvie
 
 ## Tools you may have available
 
-This skill is fully usable with no special tools — you have enough SurveyCTO knowledge embedded here and at the live documentation links to advise the user, describe edits in prose, and reason about forms. If additional tools are present, use them; if not, fall through to the next option in this list.
+This skill is fully usable with no special tools — you have enough SurveyCTO knowledge embedded here and at the live documentation links to advise the user, describe edits in prose, and reason about forms. If additional tools are present, use them in the priority order below.
+
+**Tool-selection rule for XLSForm work:** if the SurveyCTO MCP server tools are connected, you MUST use them for nontrivial XLSForm inspection, editing, validation, and export. Do not choose generic `bash`, `python`, `openpyxl`, LibreOffice, or spreadsheet tooling as the primary authoring path when SurveyCTO MCP tools are available. Generic tooling is only a fallback if MCP tools are unavailable, disconnected, or return an unrecoverable error.
 
 ### SurveyCTO MCP server (preferred when available)
 
-The **SurveyCTO MCP server** is a public, no-auth MCP server that gives you two capabilities specifically built for this domain. **Strongly recommend installing it** when the user is doing nontrivial XLSForm work or wants citations from current SurveyCTO documentation.
+The **SurveyCTO MCP server** is a public, no-auth MCP server that gives you capabilities specifically built for this domain. It is the primary tool path for nontrivial XLSForm work and current SurveyCTO knowledge-base lookup.
 
 **Endpoint** (Streamable HTTP transport, stateless, no auth): `https://assistant-be.surveycto.net/mcp`
 
@@ -56,6 +58,8 @@ stdio-only clients can wrap with `mcp-remote`:
 
 If the user is editing XLSForms or asking factual SurveyCTO questions and the MCP server isn't connected, mention that it exists, name the production URL, and offer to walk them through installing it. Don't insist; the skill works without it.
 
+In agent environments where tools must be loaded or selected before use, search/load tools matching `surveycto`, `xlsform`, or the raw tool names below. Names may be namespaced by the host (for example, `mcp__surveycto__start_xlsform_session`), but the operation names are the same.
+
 #### Tool surface
 
 | Tool | When to use |
@@ -63,26 +67,39 @@ If the user is editing XLSForms or asking factual SurveyCTO questions and the MC
 | `get_surveycto_mcp_capabilities` | First call when unsure. Returns the canonical tool list, recommended workflows, available primer topics, server version, recalc availability, and the concurrency contract. |
 | `kb_search(query, top_k=5)` | Any factual SurveyCTO question. Searches `www.surveycto.com`, `docs.surveycto.com`, `support.surveycto.com`. Returns `{title, url, excerpt}` hits. `top_k` capped at 20. **Quote source URLs in answers.** |
 | `get_surveycto_primer(topic)` | Available primers at server-side: `overview`, `xlsform`, `expressions` (full set in the discovery payload's `available_primer_topics`). Mostly useful for callers without the skill installed; you already have these locally. |
-| `start_xlsform_session(xlsx_base64, original_filename?)` | Caller wants to inspect or edit an XLSForm. Returns `session_id`, `expires_at`, `current_version`, `size_bytes`, `original_filename`, `form_summary`, `warnings`, `recommended_next_actions`. **Use the returned `form_summary` for orientation before paging rows.** |
+| `start_xlsform_session(xlsx_base64?, original_filename?)` | Caller wants to inspect or edit an XLSForm. **Recommended: omit `xlsx_base64` first.** The server returns a short-lived `upload_url` and `curl_example`; upload with `curl -F file=@form.xlsx '<upload_url>'`. The upload response returns `session_id`, `expires_at`, `current_version`, `size_bytes`, `original_filename`, `form_summary`, `warnings`, `recommended_next_actions`. Use inline `xlsx_base64` only for small files when it will not burn model context. **Use the returned `form_summary` for orientation before paging rows.** |
 | `get_xlsform_summary(session_id)` | Resuming an existing session (new agent context, after a long gap). Read-only and cheap. Returns the same `form_summary` shape plus `current_version` and `expires_at`. |
 | `xls_get_rows(session_id, sheet, where?, order_by?, start, limit, columns?, expand?, …)` | Inspect rows. `limit` capped at 100. Use `expand=["choices","deps_in","deps_out","expressions_refs","groups_enclosing","deps_in_closure","deps_out_closure"]` as needed. Read-only; safe to call in parallel. |
 | `xls_get_row(session_id, sheet, excel_row, columns?, expand?, …)` | Fetch one row by 1-based Excel row number. Same expand options. |
-| `xls_apply_patches(session_id, patches, validate_only=false)` | Make edits. **Batch all related edits into one call.** Patch ops: `add_row`, `edit_row`, `delete_row`, `rename` (kinds: `field`, `group`, `list`, `language`, `column`), `change_setting`, `delete_column`. Returns `summary`, `new_version`, refreshed `form_summary`, `recommended_next_actions`. Use `validate_only=true` for a dry run. |
-| `export_xlsform(session_id, version?, format="resource")` | Get the workbook back. Default `format="resource"` returns an `xlsform://{session_id}/{version}` URI for `resources/read`; pass `"base64"` to inline bytes, `"both"` for belt-and-suspenders. **Recalc only runs when `version >= 2`** (post-edit); `version == 1` returns the original upload unchanged with `recalc.status="skipped"`. |
-| `end_xlsform_session(session_id)` | Optional but encouraged when done. Idempotent. |
+| `xls_apply_patches(session_id, patches, validate_only=false, return_form_summary=true, include_details=true)` | Make edits. Batch all related edits into one call. See `xls_apply_patches` details below for op-to-sheet rules, settings edits, column aliases, output-size flags, and dry-run behavior. |
+| `export_xlsform(session_id, version?, format="resource")` | Get the workbook back. Default `format="resource"` returns an `xlsform://{session_id}/{version}` URI, a formal `resource_link`, and an HTTPS `download_url` with `curl_example`. Prefer the `download_url` or resource link. Do **not** use `format="base64"` for real workbooks; it is only for tiny compatibility cases. **Recalc only runs when `version >= 2`** (post-edit); `version == 1` returns the original upload unchanged with `recalc.status="skipped"`. |
+| `end_xlsform_session(session_id)` | Optional explicit cleanup. Usually skip it and let the session expire by TTL so `download_url` / resource links remain usable for follow-up requests. Idempotent. |
 
-Resource: `xlsform://{session_id}/{version}` — read with `resources/read` for the recalculated bytes (or unchanged upload at version 1). Lifetime tied to the 24 h session TTL. MIME `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`.
+Resource: `xlsform://{session_id}/{version}` — read with `resources/read` for the recalculated bytes (or unchanged upload at version 1). `export_xlsform` also returns an HTTPS `download_url` tied to the session TTL; once the session expires, the server rejects the URL. Download it or hand it off before TTL expiry. MIME `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`.
+
+##### `xls_apply_patches` Details
+
+- **Batching:** Batch related edits into one call and serialize calls per `session_id`.
+- **Patch ops:** Supported ops are `add_row`, `edit_row`, `delete_row`, `rename` (kinds: `field`, `group`, `list`, `language`, `column`), `change_setting`, and `delete_column`.
+- **Allowed sheets:** Use `add_row`, `edit_row`, and `delete_row` only for `survey` and `choices`.
+- **Settings:** Use `change_setting` for row-2 settings such as `form_title`, `form_id`, and `default_language`; do not use `edit_row` on `settings`.
+- **Column aliases:** The server normalizes common aliases such as `constraint_message` -> `constraint message`, `required_message` -> `required message`, `read_only` -> `read only`, and `relevant` -> `relevance`.
+- **Unknown columns:** Review `unknown_column_added` warnings. Custom/plugin columns can be intentional, but most accidental new columns are misspellings.
+- **Large batches:** Set `return_form_summary=false` and `include_details=false`, then call `get_xlsform_summary` only when you need a fresh summary.
+- **Dry runs:** Use `validate_only=true` for risky changes.
 
 #### Recommended workflow
 
 1. **First call (or when unsure)**: `get_surveycto_mcp_capabilities` to learn the current tool list and primer topics.
 2. **Factual SurveyCTO questions**: `kb_search` → quote the returned URLs in your answer.
-3. **Inspect or edit an XLSForm**:
-   1. `start_xlsform_session` (or `get_xlsform_summary` if resuming an existing `session_id`) → store `session_id`, read `form_summary` to orient.
-   2. `xls_get_rows` / `xls_get_row` to inspect the rows you intend to touch. Parallel calls are fine.
-   3. `xls_apply_patches` — **batch all related edits into one call**. Use `validate_only=true` first for risky changes.
-   4. `export_xlsform` → hand the resulting bytes (or resource URI) back to the user.
-   5. `end_xlsform_session` when done (optional).
+3. **Create, inspect, or edit an XLSForm**:
+   1. Start from the bundled template for new forms, or from the user's existing workbook. For a new form, copy the template to the output path, then immediately upload that copy into an MCP session. Do not inspect or mutate the template workbook before uploading unless MCP tools are unavailable.
+   2. `start_xlsform_session` (or `get_xlsform_summary` if resuming an existing `session_id`) → for a local file, omit `xlsx_base64`, run the returned `curl_example`, then store the `session_id` from the upload response. The upload response includes `form_summary`; read it carefully before making follow-up row queries.
+   3. **Take a starting inventory from `form_summary` before patching or paging rows.** Explicitly note the existing starter rows and next append location; exact survey and choices column names already present; existing choice lists and stored values (especially reusable lists such as `yesno`); settings values (`form_id`, `form_title`, `default_language`, `version`); template metadata/calculation rows; and any `errors` or warnings. Do not assume column spellings or choice values from memory. Reuse existing columns/lists where appropriate, or intentionally change them before writing dependent expressions.
+   4. `xls_get_rows` / `xls_get_row` to inspect the rows you intend to touch. Parallel calls are fine.
+   5. `xls_apply_patches` — **batch all related edits into one call**. Use `validate_only=true` on the full batch before committing risky or large changes. For new forms, add survey rows and choices with `add_row`; update settings with `change_setting` rather than `edit_row`; do not edit the `.xlsx` with Python when MCP is available. For large batches, set `return_form_summary=false` and `include_details=false`, then call `get_xlsform_summary` only when you need a fresh summary.
+   6. `export_xlsform` → hand the resulting `download_url`/`curl_example` or resource link back to the user. The server handles XLSX preservation and formula recalculation. Avoid `format="base64"` for real workbooks.
+   7. Usually leave the session open until TTL expiry. Only call `end_xlsform_session` if the user explicitly wants server-side cleanup and no further downloads/follow-up edits are needed.
 
 #### Concurrency contract
 
@@ -113,7 +130,7 @@ Tool responses use `{"error": {"code": str, "message": str, "data": {...}}}`. Re
 
 ### Generic spreadsheet/xlsx tooling
 
-If you have a generic xlsx, Excel, or spreadsheet skill/tool, it can read and edit `.xlsx` files cell by cell. This works fine for SurveyCTO XLSForms and Data Explorer workbooks; the SurveyCTO MCP server is preferable when present because it understands form semantics, but generic tooling is a perfectly reasonable path. Follow the editing rules in the *Working with XLSForm .xlsx files* section below.
+Use generic xlsx, Excel, Python/openpyxl, LibreOffice, or spreadsheet tools only when SurveyCTO MCP tools are not available or have failed in a way you cannot recover from. These tools can read and edit `.xlsx` files cell by cell, but they do not understand SurveyCTO form semantics, MCP session concurrency, or server-side formula recalculation. If you must use generic tooling, explicitly tell the user you are falling back because the MCP tools are unavailable or failed, then follow the editing rules in the *Working with XLSForm .xlsx files* section below.
 
 ### Web fetch
 
@@ -222,7 +239,7 @@ Exception: when the string contains single quotes, use double quotes:
 
 ## Working with XLSForm .xlsx files
 
-This section applies regardless of which file-tooling path you're using (SurveyCTO MCP server, generic xlsx tool, or describing edits in prose for the user to apply). The rules are the same; only the mechanism differs.
+This section applies regardless of which file-tooling path you're using (SurveyCTO MCP server, generic xlsx tool, or describing edits in prose for the user to apply). The rules are the same; only the mechanism differs. When MCP tools are connected, use this section to plan and validate edits, but apply the edits through `xls_apply_patches` and export through `export_xlsform`.
 
 ### CRITICAL: Always start from the template
 
@@ -230,8 +247,8 @@ Every new XLSForm **must** start from the bundled template at [`assets/xlsform-t
 
 **How to use the template:**
 1. Copy `assets/xlsform-template.xlsx` to the desired output path.
-2. Open the copied file (or pass it to `start_xlsform_session` if using the MCP server).
-3. Edit it in place — add your content into the existing worksheets.
+2. If MCP tools are available, pass the copied file to `start_xlsform_session` via the upload URL flow and apply edits with `xls_apply_patches`.
+3. If MCP tools are unavailable, open the copied file and edit it in place — add your content into the existing worksheets.
 
 **Never do any of the following:**
 - Do NOT create a new `.xlsx` file from scratch.
@@ -255,19 +272,20 @@ The template provides:
 - **Only write to rows that contain or will contain data.** Don't touch unused rows below your content; don't write empty strings or `None` to clear already-empty cells.
 - **Append new rows after existing data.** The template's survey worksheet has starter rows in rows 2–5; begin adding fields at row 6.
 - **Don't overwrite the `version` cell** in `settings` — it contains an auto-updating formula. (The MCP server's `export_xlsform` recalculates this for you.)
+- **Use plain labels by default.** SurveyCTO does not render Markdown in labels, hints, notes, or messages. Prefer plain text; use simple inline HTML only when it materially helps. See [Label, Hint, And Message Formatting](references/xlsform.md#label-hint-and-message-formatting).
 
 ### Editing workflow
 
 1. **Start from the right base** — copy the template (new forms) or load the existing workbook.
 2. **Read the existing structure** so you know what's there.
-   - With MCP: `start_xlsform_session` then `xls_get_rows`.
-   - With generic xlsx tooling: open and read all three sheets.
+   - With MCP available: upload first with `start_xlsform_session`, then use the returned `form_summary` as the starting overview. Call `xls_get_rows` only when you need more detail than the summary provides.
+   - Without MCP: open and read all three sheets.
 3. **Plan the edits** — identify the rows to add/modify and the cell values.
 4. **Apply** — write cell values into the appropriate rows and columns.
-   - With MCP: `xls_apply_patches`.
-   - With generic xlsx tooling: write cells directly.
+   - With MCP available: `xls_apply_patches`.
+   - Without MCP: write cells directly.
 5. **Validate** against the checklist below.
-6. **Save / export** — the MCP server's `export_xlsform` runs formula recalculation and returns the file; with generic tooling, save the workbook.
+6. **Save / export** — with MCP available, `export_xlsform` runs formula recalculation and returns the file; without MCP, save the workbook and use the best available recalculation path.
 
 ### Common operations
 
@@ -278,7 +296,7 @@ The template provides:
 - **Add skip logic**: write the expression into the `relevance` column on the target row.
 - **Add a constraint**: write the expression into `constraint` (use `.` for current value); write a user-facing message into `constraint message`.
 - **Add a calculation**: row with `type=calculate`, unique `name`, expression in `calculation`.
-- **Update settings**: write `form_title` and `form_id` into row 2 of `settings`. Leave `version` alone.
+- **Update settings**: with MCP, use `change_setting` for `form_title`, `form_id`, and `default_language`. Without MCP, write those values into row 2 of `settings`. Leave `version` alone.
 
 ### Validation checklist
 
@@ -293,6 +311,7 @@ After editing, verify:
 - [ ] Every choice list has at least one row with a `value` and `label`
 - [ ] `${fieldname}` references in expressions point to fields that exist
 - [ ] Expressions use SurveyCTO conventions (`=` not `==`, `index()` not `position()`, etc.)
+- [ ] Labels, hints, notes, and messages use plain text or simple inline HTML fragments, not Markdown
 - [ ] `settings` has `form_title` and `form_id`
 
 ## Dataset XML definitions
