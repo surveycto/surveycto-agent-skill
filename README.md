@@ -133,7 +133,8 @@ The five primers in `references/` have two different maintenance models, dependi
 
 ### Docs-derived primers (regenerated periodically)
 
-`overview.md`, `xlsform.md`, and `expressions.md` cover material that `docs.surveycto.com` documents thoroughly. They are intended to be regenerated periodically from a careful, top-down read of the live docs as the underlying product changes and as more capable AI agents become available. The prompts below are designed for [Claude Cowork](https://claude.ai/) (or any agent with web-fetch and file-write capabilities) — paste one into a fresh session, let it run, and replace the corresponding file with the result.
+`overview.md`, `xlsform.md`, and `expressions.md` cover material that `docs.surveycto.com` documents thoroughly. They are intended to be regenerated periodically from a careful, top-down read of the live docs as the underlying product changes and as more capable AI agents become available. The prompts below are designed for a very capable AI agent with web-fetch and file-write capabilities — paste one into a fresh session, let it run, and replace the corresponding file with the result. (The initial versions were built by
+ChatGPT Codex with GPT-5.5 High in VS Code.)
 
 **Order matters.** Generate them top-down so each lower-level primer can rely on the higher-level ones:
 
@@ -161,8 +162,8 @@ a capable LLM agent that has just been told it needs to help a user with
 SurveyCTO, knows nothing specific about the product, and needs orientation
 before diving into details.
 
-Read the following SurveyCTO documentation and produce a single Markdown file
-to save as `references/overview.md` in the surveycto-agent-skill repo:
+Read the SurveyCTO documentation and produce a single Markdown file
+to save as `references/overview.md` in the surveycto-agent-skill repo.
 
 Primary sources to read carefully:
 - https://docs.surveycto.com/ (the docs home; survey the top-level table of contents)
@@ -194,7 +195,8 @@ Constraints:
 - This is a high-level primer. Do NOT include exhaustive column lists, field
   type catalogs, expression function reference, or XML element reference —
   those belong in the lower-level primers.
-- Keep it readable in roughly 2–3 minutes (~600–900 words plus tables).
+- Keep it concise, but note that we are less concerned with token efficiency 
+  than with building effective and accurate expertise in the agent.
 - Open with an HTML comment block: `<!-- PRIMER: overview\n  STATUS: regenerated YYYY-MM-DD from docs.surveycto.com -->`.
 - Use Markdown headings starting at H1 ("# SurveyCTO Overview").
 - Use tables for the file-type recognition matrix.
@@ -202,7 +204,10 @@ Constraints:
 - Link back to canonical docs URLs whenever you assert a product fact.
 - Do NOT invent product behavior. If a source is ambiguous, say so or omit.
 
-Produce only the file contents, ready to save.
+Save as `references/overview.md`. Produce only the file contents.
+
+Before you conclude, double-check everything for accuracy. Mistakes in these
+primers can affect vital work done by SurveyCTO users.
 ```
 
 ### Prompt 2 — `xlsform.md`
@@ -278,6 +283,9 @@ Constraints:
   call it out explicitly.
 
 Save as `references/xlsform.md`. Produce only the file contents.
+
+Before you conclude, double-check everything for accuracy. Mistakes in these
+primers can affect vital work done by SurveyCTO users.
 ```
 
 ### Prompt 3 — `expressions.md`
@@ -327,6 +335,8 @@ The primer must cover:
 
 Constraints:
 - Open with an HTML comment block: `<!-- PRIMER: expressions\n  STATUS: regenerated YYYY-MM-DD from docs.surveycto.com -->`.
+- Length: as long as needed for completeness, but tight. Aim for accuracy
+  and structure over prose.
 - This primer is about *language*, not *placement*. If a function relates to
   a specific XLSForm column or feature, link to xlsform.md or
   datasets-xml.md rather than re-explaining it.
@@ -337,6 +347,9 @@ Constraints:
 - Do NOT invent functions. If you can't find docs for a function, omit it.
 
 Save as `references/expressions.md`. Produce only the file contents.
+
+Before you conclude, double-check everything for accuracy. Mistakes in these
+primers can affect vital work done by SurveyCTO users.
 ```
 
 ### Syncing primers to the MCP server
