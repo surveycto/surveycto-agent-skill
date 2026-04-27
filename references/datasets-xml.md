@@ -1,3 +1,13 @@
+<!--
+  PRIMER: datasets-xml
+  STATUS: source-code-derived. Public SurveyCTO documentation does not fully
+  document the dataset XML format, so this primer was originally derived from
+  inspection of the SurveyCTO server source code (and validated against real
+  exported dataset XML files). It is NOT regenerated from docs.surveycto.com
+  via the README's "Regenerating primers" workflow. Update only when the
+  underlying schema changes, and only by re-deriving from the source.
+-->
+
 # Dataset XML Definition Reference
 
 SurveyCTO dataset definitions are XML files that define dataset structure, form attachments, and publishing rules. Data is stored separately as CSV. For full documentation, see [Introduction to advanced dataset usage](https://docs.surveycto.com/05-exporting-and-publishing-data/04-advanced-publishing-with-datasets/01.datasets-intro.html) and [Working with server dataset XML files](https://support.surveycto.com/hc/en-us/articles/1500000322461).

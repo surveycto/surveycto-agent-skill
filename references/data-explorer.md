@@ -1,3 +1,15 @@
+<!--
+  PRIMER: data-explorer
+  STATUS: source-code-derived. The public Data Explorer documentation
+  explicitly tells readers to "export a workbook and consult the four help
+  worksheets as needed" rather than documenting columns, summary types, and
+  options inline; this primer was originally derived from inspection of the
+  SurveyCTO server source code and validated against real exported workbook
+  definitions. It is NOT regenerated from docs.surveycto.com via the README's
+  "Regenerating primers" workflow. Update only when the underlying workbook
+  schema changes, and only by re-deriving from the source.
+-->
+
 # Data Explorer Workbook Definition Reference
 
 Data Explorer workbooks visualize form data with field summaries, relationship charts, and quality checks. Workbook definitions are Excel files with specific worksheets. For full documentation, see [Advanced use of Data Explorer workbooks](https://docs.surveycto.com/04-monitoring-and-management/02-managing-for-quality/04.advanced-data-explorer.html).
