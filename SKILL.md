@@ -259,7 +259,7 @@ Every new XLSForm **must** start from the bundled template at [`assets/xlsform-t
 **Why the template is mandatory:** It contains conditional formatting rules, help worksheets, column headers, starter metadata fields, formula-based versioning, and pre-formatted rows that cannot be reliably recreated programmatically. Skipping the template produces files that are technically valid but painful for humans to edit in Excel.
 
 The template provides:
-- **survey** worksheet with correct column headers and starter metadata fields (`start`, `end`, `deviceid`, `phonenumber`)
+- **survey** worksheet with correct column headers and starter metadata fields, including hidden audit calculations and a `caseid` row
 - **choices** worksheet with headers and a `yesno` choice list
 - **settings** worksheet with headers and an auto-updating `version` formula
 - **help-survey**, **help-choices**, **help-settings** worksheets with reference documentation
@@ -270,7 +270,7 @@ The template provides:
 - **Preserve all existing worksheets** — including `help-survey`, `help-choices`, `help-settings` and any other sheets present in the template or existing form.
 - **Preserve existing formatting** — do not clear or overwrite conditional formatting, column widths, or cell styles.
 - **Only write to rows that contain or will contain data.** Don't touch unused rows below your content; don't write empty strings or `None` to clear already-empty cells.
-- **Append new rows after existing data.** Do not assume a fixed starter-row count — the template ships with several pre-populated metadata/calculation rows (`start`, `end`, `deviceid`, `phonenumber`, `username`, `device_info`, `duration`, `caseid`) and an existing form may have any number of rows. With MCP, `add_row` appends automatically; you do not need to compute a row index, but you can derive one from `form_summary` (`counts.n_rows`, or the largest `excel_row` in `survey_preview_rows`) or by paging `xls_get_rows` if you need it. Without MCP, scan the workbook for the first row in `survey` (and `choices`) where `type`/`list_name` and the surrounding columns are all empty, and append there.
+- **Append new rows after existing data.** Do not assume a fixed starter-row count — the template ships with several pre-populated metadata and calculation rows (including hidden audit calculations and a `caseid` row), and an existing form may have any number of rows. With MCP, `add_row` appends automatically; you do not need to compute a row index, but you can derive one from `form_summary` (`counts.n_rows`, or the largest `excel_row` in `survey_preview_rows`) or by paging `xls_get_rows` if you need it. Without MCP, scan the workbook for the first row in `survey` (and `choices`) where `type`/`list_name` and the surrounding columns are all empty, and append there.
 - **Don't overwrite the `version` cell** in `settings` — it contains an auto-updating formula. (The MCP server's `export_xlsform` recalculates this for you.)
 - **Use plain labels by default.** SurveyCTO does not render Markdown in labels, hints, notes, or messages. Prefer plain text; use simple inline HTML only when it materially helps. See [Label, Hint, And Message Formatting](references/xlsform.md#label-hint-and-message-formatting).
 
