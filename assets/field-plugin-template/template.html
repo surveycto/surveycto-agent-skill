@@ -1,0 +1,25 @@
+<!--
+  Minimal SurveyCTO field plug-in template (text fields).
+
+  - Triple braces are used for LABEL and HINT because SurveyCTO labels and
+    hints can contain HTML and double braces would HTML-escape them.
+  - The default-*-text-size classes let the field plug-in honor the user's
+    font-size settings inside SurveyCTO Collect.
+  - {{PLUGINDIR}} resolves to the unpacked plug-in directory at runtime; use
+    it to reference plug-in attachments. There are none in this skeleton.
+-->
+
+<div class="plugin-root">
+  <label class="plugin-label default-question-text-size">{{{LABEL}}}</label>
+  {{#HINT}}
+    <p class="plugin-hint default-hint-text-size">{{{HINT}}}</p>
+  {{/HINT}}
+
+  <input
+    id="plugin-input"
+    class="plugin-input default-answer-text-size"
+    type="text"
+    autocomplete="off"
+    value="{{CURRENT_ANSWER}}"
+  />
+</div>

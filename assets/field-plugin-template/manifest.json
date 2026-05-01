@@ -1,0 +1,6 @@
+{
+  "name": "template",
+  "author": "SurveyCTO",
+  "version": "0.1.0",
+  "supportedFieldTypes": ["text"]
+}

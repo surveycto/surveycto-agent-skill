@@ -22,7 +22,9 @@ jobs:
             -x '.DS_Store' \
             -x 'Thumbs.db' \
             -x '**/.DS_Store' \
-            -x '**/Thumbs.db'
+            -x '**/Thumbs.db' \
+            -x '.kilo/*' \
+            -x 'planning/*'
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -32,7 +32,9 @@ jobs:
             -x '.DS_Store' \
             -x 'Thumbs.db' \
             -x '**/.DS_Store' \
-            -x '**/Thumbs.db'
+            -x '**/Thumbs.db' \
+            -x '.kilo/*' \
+            -x 'planning/*'
 
       - name: Create or update release
         uses: softprops/action-gh-release@v2

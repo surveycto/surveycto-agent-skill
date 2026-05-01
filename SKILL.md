@@ -4,11 +4,14 @@ description: >
   Design, edit, and debug SurveyCTO forms (XLSForm .xlsx files) and server
   datasets (XML definition files). Covers form logic, expressions, choice
   lists, repeat groups, skip patterns, constraints, calculations, dataset
-  publishing, case management, and Data Explorer workbook definitions. Use
-  when the user mentions SurveyCTO, XLSForm, ODK-based forms, survey forms,
-  or data collection forms, or when working with .xlsx files that contain
-  survey/choices/settings worksheets, XML files with dataset root elements,
-  or Excel workbook definitions for data monitoring dashboards.
+  publishing, case management, Data Explorer workbook definitions, and
+  field plug-ins (.fieldplugin.zip bundles attached to fields via
+  "custom-pluginname" appearances). Use when the user mentions SurveyCTO,
+  XLSForm, ODK-based forms, survey forms, or data collection forms, or
+  when working with .xlsx files that contain survey/choices/settings
+  worksheets, XML files with dataset root elements, Excel workbook
+  definitions for data monitoring dashboards, or .fieldplugin.zip plug-in
+  bundles.
 license: Apache-2.0
 metadata:
   author: SurveyCTO
@@ -17,11 +20,12 @@ metadata:
 
 # SurveyCTO Form and Dataset Authoring
 
-SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the three definition file types you may encounter:
+SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
 1. **XLSForm form definitions** (`.xlsx`) — survey instruments
 2. **Dataset definitions** (`.xml`) — server dataset structure and publishing rules
 3. **Data Explorer workbook definitions** (`.xlsx`) — monitoring dashboards
+4. **Field plug-in bundles** (`.fieldplugin.zip`) — custom HTML/CSS/JS that takes over rendering of a single field
 
 For a high-level orientation, read [`references/overview.md`](references/overview.md) first.
 
@@ -32,6 +36,7 @@ For a high-level orientation, read [`references/overview.md`](references/overvie
 | XLSForm | `.xlsx` | Worksheets named `survey`, `choices`, `settings` |
 | Dataset definition | `.xml` | Root element `<dataset>` with `<definition>` child |
 | Data Explorer workbook | `.xlsx` | Worksheets named `summaries`, `settings`, `global_filters`, `global_exclusions` |
+| Field plug-in bundle | `.fieldplugin.zip` | Zip with `manifest.json`, `template.html`, `style.css`, `script.js` at the root; referenced from a field's `appearance` as `custom-<name>` |
 
 ## Tools you may have available
 
@@ -347,6 +352,28 @@ The `summaries` worksheet defines visualizations. Each row is a summary with a `
 
 **Full reference**: [`references/data-explorer.md`](references/data-explorer.md).
 
+## Field plug-ins
+
+A field plug-in is a `.fieldplugin.zip` bundle (HTML/CSS/JS at the zip root) that takes over the rendering of a single form field. Plug-ins are supported only on `text`, `integer`, `decimal`, `select_one`, and `select_multiple` fields, and they run inside SurveyCTO Collect (Android), SurveyCTO Collect for iOS, and web forms.
+
+### Use an existing plug-in in a form
+
+1. Attach the `.fieldplugin.zip` to the form (Form Designer → Attachments, or as a regular form attachment when uploading the XLSForm).
+2. On the field, set `appearance` to `custom-<filenamestem>` — the part of the zip filename before `.fieldplugin.zip`, e.g. `myplugin.fieldplugin.zip` → `custom-myplugin` — with optional `(key=value, …)` parameters.
+
+### Authoring (when the user wants to build a plug-in)
+
+- Fork the closest **SurveyCTO baseline plug-in** for the field type (`baseline-text`, `baseline-integer`, `baseline-decimal`, `baseline-select_one`, `baseline-select_multiple`) or, for a clean text-only starting point, copy [`assets/field-plugin-template/`](assets/field-plugin-template/).
+- Edit the four files at the bundle root: `manifest.json`, `template.html`, `style.css`, `script.js`. Always use triple-brace Mustache for `{{{LABEL}}}` and `{{{HINT}}}` (they may contain HTML).
+- Re-package as `<name>.fieldplugin.zip` with all files at the zip root (subdirectories get flattened on upload). Bump `manifest.version` on every re-upload.
+
+### Testing
+
+- **Local fast loop:** [`assets/field-plugin-test-harness/`](assets/field-plugin-test-harness/) ships `validate.mjs` (static checks) and `preview.html` (a single self-contained browser harness that renders the plug-in against editable fixtures with a stubbed host bridge). The harness works as an inline HTML/JS artifact in agent UIs that support them — pre-populate the textareas with the plug-in source and update them as the plug-in evolves.
+- **Final validation:** the in-product **field plug-in console** in the form designer's test view. Required before deployment; the local harness's stubs are not a complete substitute for real Android/iOS/web form runtimes.
+
+For everything else — full manifest schema, form API (field properties, runtime CSS classes, provided/called JS functions), parameters and metadata model, Android-only intent and phone APIs, and common pitfalls — see [`references/field-plugins.md`](references/field-plugins.md).
+
 ## Common patterns
 
 ### Cascading selects
@@ -375,6 +402,16 @@ See [`references/xlsform.md`](references/xlsform.md) for `search()` syntax patte
 1. Inside the repeat: `calculate` field with `calculation = once(random())`.
 2. Outside the repeat: `rank-index(1, ${random_calc})` returns the index of the randomly-selected instance.
 
+### Use a custom field plug-in
+
+Attach the `.fieldplugin.zip` to the form, then set `appearance` on the field to `custom-<filenamestem>` with any parameters the plug-in expects. The `<filenamestem>` is the part of the zip filename before `.fieldplugin.zip` (for example, `phonenumber.fieldplugin.zip` → `custom-phonenumber`). The `name` field inside `manifest.json` is a human-readable display name and does **not** drive the appearance.
+
+| type | name | appearance |
+| --- | --- | --- |
+| `text` | `phone` | `custom-phonenumber(country='US', placeholder=${default_format})` |
+
+Parameter values are evaluated by the form before the plug-in loads, so `${field}` references and full SurveyCTO expressions work. In the plug-in, read parameters with `getPluginParameter('country')` rather than indexing `fieldProperties.PARAMETERS`. Full reference: [`references/field-plugins.md`](references/field-plugins.md).
+
 ### Publishing form data to a dataset
 
 In the dataset XML, add a `<dataLink>` with:
@@ -397,6 +434,9 @@ In the dataset XML, add a `<dataLink>` with:
 | Date comparison fails | Comparing string to date | Wrap with `date()`: `${field} > date('2024-01-01')` |
 | Dataset won't upload | Referenced form not deployed | Deploy all forms in `<formLinks>` and `<dataLinks>` first |
 | Dataset element ignored | Case-sensitivity error | Check exact casing (e.g., `otherUserCode`) |
+| Plug-in field doesn't appear / `custom-<name>` ignored | Plug-in `.fieldplugin.zip` not attached, name mismatch, or unsupported field type | Re-attach the zip; confirm the `custom-<name>` token matches the **`.fieldplugin.zip` filename stem** (e.g. `myplugin.fieldplugin.zip` → `custom-myplugin`), not `manifest.name`; plug-ins only work on `text`/`integer`/`decimal`/`select_one`/`select_multiple` |
+| Plug-in answer not saved | `setAnswer` not called, or `select_multiple` value joined with commas | Wire input events to `setAnswer(value)`; for `select_multiple`, pass a **space**-separated list |
+| Plug-in attachments 404 at runtime | Files placed in subdirectories inside the zip | Flatten the zip — every file at the root, no duplicate basenames |
 
 ## References
 
@@ -407,6 +447,7 @@ In the dataset XML, add a `<dataLink>` with:
 | [`references/expressions.md`](references/expressions.md) | Any expression work (relevance, constraint, calculation, choice_filter) |
 | [`references/datasets-xml.md`](references/datasets-xml.md) | Server dataset XML definitions |
 | [`references/data-explorer.md`](references/data-explorer.md) | Data Explorer dashboards |
+| [`references/field-plugins.md`](references/field-plugins.md) | Field plug-in authoring, packaging, form API, and testing |
 
 ## Key documentation links
 
@@ -418,4 +459,6 @@ In the dataset XML, add a `<dataLink>` with:
 - [Introduction to advanced dataset usage](https://docs.surveycto.com/05-exporting-and-publishing-data/04-advanced-publishing-with-datasets/01.datasets-intro.html)
 - [Working with server dataset XML files](https://support.surveycto.com/hc/en-us/articles/1500000322461)
 - [Advanced use of Data Explorer workbooks](https://docs.surveycto.com/04-monitoring-and-management/02-managing-for-quality/04.advanced-data-explorer.html)
+- [Using field plug-ins](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/06.using-field-plug-ins.html)
+- [Field plug-in developer documentation (GitHub)](https://github.com/surveycto/field-plug-in-resources/blob/master/docs/developer-docs-home.md)
 - [SurveyCTO Support Center](https://support.surveycto.com)

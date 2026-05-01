@@ -1,0 +1,1165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SurveyCTO Field Plug-in Test Harness</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #111827;
+    --panel-2: #1f2937;
+    --border: #374151;
+    --text: #e5e7eb;
+    --muted: #9ca3af;
+    --accent: #2c7be5;
+    --warn: #f59e0b;
+    --err: #ef4444;
+    --ok: #22c55e;
+    --code-bg: #0b1220;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column;
+  }
+  header {
+    padding: 8px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { margin: 0; font-size: 14px; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  .btn {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 4px 10px; cursor: pointer; font-size: 12px;
+  }
+  .btn:hover { background: #2a3447; }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: white; }
+  .btn-primary:hover { background: #1f5fbf; }
+  main {
+    flex: 1; min-height: 0;
+    display: grid;
+    grid-template-columns: 1.1fr 1fr 0.8fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+  }
+  .pane {
+    background: var(--panel);
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    min-width: 0; min-height: 0;
+  }
+  .pane h2 {
+    margin: 0; padding: 6px 10px;
+    background: var(--panel-2); border-bottom: 1px solid var(--border);
+    font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--muted);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .pane-body { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; }
+  .pane-body.flush { padding: 0; }
+  #source-pane { grid-column: 1; grid-row: 1 / span 2; }
+  #render-pane { grid-column: 2; grid-row: 1; }
+  #control-pane { grid-column: 3; grid-row: 1; }
+  #output-pane { grid-column: 2 / span 2; grid-row: 2; }
+
+  .tabs { display: flex; gap: 0; background: var(--panel-2); border-bottom: 1px solid var(--border); }
+  .tab {
+    background: transparent; border: 0; color: var(--muted);
+    padding: 6px 12px; cursor: pointer; font-size: 12px;
+    border-bottom: 2px solid transparent;
+  }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .editor {
+    flex: 1; width: 100%;
+    background: var(--code-bg); color: var(--text);
+    border: 0; resize: none; outline: none;
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    padding: 8px 10px;
+    tab-size: 2;
+  }
+  .editor[hidden] { display: none; }
+
+  iframe#preview {
+    width: 100%; height: 100%; border: 0; background: white;
+  }
+  .frame-wrap {
+    height: 100%;
+    background: white;
+    color: black;
+  }
+
+  .control-section { margin-bottom: 12px; }
+  .control-section h3 {
+    margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase;
+    color: var(--muted); letter-spacing: 0.04em;
+  }
+  .control-section label { display: block; margin-bottom: 4px; font-size: 12px; }
+  .control-section select,
+  .control-section input[type="text"] {
+    width: 100%; padding: 4px 6px;
+    background: var(--code-bg); border: 1px solid var(--border);
+    color: var(--text); border-radius: 3px; font-size: 12px;
+  }
+  .toggle-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .toggle-row .btn { flex: 1; }
+  .toggle-row .btn.on { background: var(--accent); border-color: var(--accent); color: white; }
+
+  .out-grid { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 1px; background: var(--border); height: 100%; }
+  .out-grid > div { background: var(--panel); padding: 8px 10px; overflow: auto; }
+  .out-grid h3 { margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.04em; }
+  .value-box {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 3px;
+    padding: 6px 8px; font: 12px/1.4 ui-monospace, monospace;
+    white-space: pre-wrap; word-break: break-word; min-height: 1.4em;
+  }
+  .log {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 3px;
+    padding: 6px 8px; font: 11px/1.4 ui-monospace, monospace;
+    white-space: pre-wrap; word-break: break-word;
+    height: calc(100% - 28px); overflow: auto;
+  }
+  .log .e-info { color: var(--text); }
+  .log .e-warn { color: var(--warn); }
+  .log .e-err  { color: var(--err); }
+  .log .e-ok   { color: var(--ok); }
+  .log .e-call { color: var(--accent); }
+
+  .pill {
+    display: inline-block; padding: 1px 6px; border-radius: 10px;
+    background: var(--panel-2); color: var(--muted); font-size: 11px;
+  }
+  .pill.ok  { background: rgba(34,197,94,0.18); color: var(--ok); }
+  .pill.err { background: rgba(239,68,68,0.18); color: var(--err); }
+  .pill.warn{ background: rgba(245,158,11,0.18); color: var(--warn); }
+
+  details { background: var(--panel-2); border: 1px solid var(--border); border-radius: 3px; padding: 4px 8px; margin-top: 8px; }
+  details summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+  small.hint { color: var(--muted); }
+  input[type="file"] { font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SurveyCTO Field Plug-in Harness</h1>
+  <span class="sub" id="status-pill"><span class="pill" id="render-status">idle</span></span>
+  <div class="spacer"></div>
+  <button class="btn" id="btn-load-folder">Load folder…</button>
+  <button class="btn" id="btn-load-files">Load files…</button>
+  <button class="btn" id="btn-reset">Reset to template</button>
+  <button class="btn btn-primary" id="btn-render">Re-render</button>
+  <input type="file" id="file-folder" webkitdirectory directory multiple hidden>
+  <input type="file" id="file-multi" multiple hidden>
+</header>
+
+<main>
+
+  <section class="pane" id="source-pane">
+    <h2>
+      Plug-in source
+      <span class="sub" style="margin-left:auto;color:var(--muted);font-weight:normal;text-transform:none;letter-spacing:0;font-size:11px">edits auto-render</span>
+    </h2>
+    <div class="tabs" id="src-tabs">
+      <button class="tab active" data-tab="html">template.html</button>
+      <button class="tab" data-tab="css">style.css</button>
+      <button class="tab" data-tab="js">script.js</button>
+      <button class="tab" data-tab="manifest">manifest.json</button>
+    </div>
+    <textarea class="editor" id="src-html" spellcheck="false"></textarea>
+    <textarea class="editor" id="src-css"  spellcheck="false" hidden></textarea>
+    <textarea class="editor" id="src-js"   spellcheck="false" hidden></textarea>
+    <textarea class="editor" id="src-manifest" spellcheck="false" hidden></textarea>
+  </section>
+
+  <section class="pane" id="render-pane">
+    <h2>Rendered field</h2>
+    <div class="pane-body flush">
+      <div class="frame-wrap">
+        <iframe id="preview" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
+      </div>
+    </div>
+  </section>
+
+  <section class="pane" id="control-pane">
+    <h2>Controls</h2>
+    <div class="pane-body">
+
+      <div class="control-section">
+        <h3>Fixture</h3>
+        <select id="fixture-select"></select>
+        <details>
+          <summary>Edit fieldProperties JSON</summary>
+          <textarea class="editor" id="fixture-json" spellcheck="false" style="height:220px;width:100%;margin-top:6px"></textarea>
+          <small class="hint">Saved when you click Re-render. Override LABEL/HINT/APPEARANCE/PARAMETERS/CHOICES/CURRENT_ANSWER/etc.</small>
+        </details>
+      </div>
+
+      <div class="control-section">
+        <h3>Runtime classes</h3>
+        <label>Platform</label>
+        <div class="toggle-row" data-toggle="platform">
+          <button class="btn on" data-value="web-collect">web-collect</button>
+          <button class="btn"    data-value="android-collect">android-collect</button>
+          <button class="btn"    data-value="ios-collect">ios-collect</button>
+        </div>
+        <label style="margin-top:6px">Read-only</label>
+        <div class="toggle-row" data-toggle="readonly">
+          <button class="btn on" data-value="off">editable</button>
+          <button class="btn"    data-value="on">is-read-only</button>
+        </div>
+        <label style="margin-top:6px">Language code</label>
+        <input type="text" id="lang-input" value="English">
+      </div>
+
+      <div class="control-section">
+        <h3>Call into plug-in</h3>
+        <div class="toggle-row" style="flex-direction:column">
+          <button class="btn" data-action="clearAnswer">clearAnswer()</button>
+          <button class="btn" data-action="setFocus">setFocus()</button>
+          <button class="btn" data-action="handleRequiredMessage">handleRequiredMessage('Please answer this question.')</button>
+          <button class="btn" data-action="handleConstraintMessage">handleConstraintMessage('Out of range.')</button>
+        </div>
+        <small class="hint">If the plug-in didn't define the function, the harness logs <span class="pill warn">not defined</span>.</small>
+      </div>
+
+      <div class="control-section">
+        <h3>Notes</h3>
+        <small class="hint">
+          Android-only APIs (<code>launchIntent</code>, <code>makePhoneCall</code>, <code>showSoftKeyboard</code>) are stubbed and only log a warning.
+          The in-product field plug-in console is still required for final validation.
+        </small>
+      </div>
+
+    </div>
+  </section>
+
+  <section class="pane" id="output-pane">
+    <h2>Output</h2>
+    <div class="pane-body flush">
+      <div class="out-grid">
+        <div>
+          <h3>Current answer</h3>
+          <div class="value-box" id="out-answer"><em style="color:var(--muted)">(none)</em></div>
+        </div>
+        <div>
+          <h3>Metadata</h3>
+          <div class="value-box" id="out-metadata"><em style="color:var(--muted)">(none)</em></div>
+        </div>
+        <div>
+          <h3>Log <button class="btn" id="btn-clear-log" style="float:right;font-size:11px;padding:1px 6px">clear</button></h3>
+          <div class="log" id="out-log"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!--
+  Vendored mustache.js v4.2.0 (MIT) — https://github.com/janl/mustache.js
+  Bundled verbatim so the harness works offline and as an inline artifact.
+-->
+<script id="mustache-js">
+/*! mustache.js - v4.2.0 - MIT License - https://github.com/janl/mustache.js */
+(function (global, factory) {
+  typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory() :
+  typeof define === 'function' && define.amd ? define(factory) :
+  (global = global || self, global.Mustache = factory());
+}(this, (function () { 'use strict';
+  var objectToString = Object.prototype.toString;
+  var isArray = Array.isArray || function (object) { return objectToString.call(object) === '[object Array]'; };
+  function isFunction (object) { return typeof object === 'function'; }
+  function typeStr (obj) { return isArray(obj) ? 'array' : typeof obj; }
+  function escapeRegExp (string) { return string.replace(/[\-\[\]{}()*+?.,\\\^$|#\s]/g, '\\$&'); }
+  function hasProperty (obj, propName) { return obj != null && typeof obj === 'object' && (propName in obj); }
+  function primitiveHasOwnProperty (primitive, propName) {
+    return primitive != null && typeof primitive !== 'object' && primitive.hasOwnProperty && primitive.hasOwnProperty(propName);
+  }
+  var regExpTest = RegExp.prototype.test;
+  function testRegExp (re, string) { return regExpTest.call(re, string); }
+  var nonSpaceRe = /\S/;
+  function isWhitespace (string) { return !testRegExp(nonSpaceRe, string); }
+  var entityMap = { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;' };
+  function escapeHtml (string) { return String(string).replace(/[&<>"'`=\/]/g, function (s) { return entityMap[s]; }); }
+  var whiteRe = /\s*/, spaceRe = /\s+/, equalsRe = /\s*=/, curlyRe = /\s*\}/, tagRe = /#|\^|\/|>|\{|&|=|!/;
+  function parseTemplate (template, tags) {
+    if (!template) return [];
+    var lineHasNonSpace = false, sections = [], tokens = [], spaces = [], hasTag = false, nonSpace = false, indentation = '', tagIndex = 0;
+    function stripSpace () { if (hasTag && !nonSpace) { while (spaces.length) delete tokens[spaces.pop()]; } else { spaces = []; } hasTag = false; nonSpace = false; }
+    var openingTagRe, closingTagRe, closingCurlyRe;
+    function compileTags (tagsToCompile) {
+      if (typeof tagsToCompile === 'string') tagsToCompile = tagsToCompile.split(spaceRe, 2);
+      if (!isArray(tagsToCompile) || tagsToCompile.length !== 2) throw new Error('Invalid tags: ' + tagsToCompile);
+      openingTagRe = new RegExp(escapeRegExp(tagsToCompile[0]) + '\\s*');
+      closingTagRe = new RegExp('\\s*' + escapeRegExp(tagsToCompile[1]));
+      closingCurlyRe = new RegExp('\\s*' + escapeRegExp('}' + tagsToCompile[1]));
+    }
+    compileTags(tags || mustache.tags);
+    var scanner = new Scanner(template);
+    var start, type, value, chr, token, openSection;
+    while (!scanner.eos()) {
+      start = scanner.pos;
+      value = scanner.scanUntil(openingTagRe);
+      if (value) {
+        for (var i = 0, valueLength = value.length; i < valueLength; ++i) {
+          chr = value.charAt(i);
+          if (isWhitespace(chr)) { spaces.push(tokens.length); indentation += chr; }
+          else { nonSpace = true; lineHasNonSpace = true; indentation += ' '; }
+          tokens.push(['text', chr, start, start + 1]);
+          start += 1;
+          if (chr === '\n') { stripSpace(); indentation = ''; tagIndex = 0; lineHasNonSpace = false; }
+        }
+      }
+      if (!scanner.scan(openingTagRe)) break;
+      hasTag = true;
+      type = scanner.scan(tagRe) || 'name';
+      scanner.scan(whiteRe);
+      if (type === '=') { value = scanner.scanUntil(equalsRe); scanner.scan(equalsRe); scanner.scanUntil(closingTagRe); }
+      else if (type === '{') { value = scanner.scanUntil(closingCurlyRe); scanner.scan(curlyRe); scanner.scanUntil(closingTagRe); type = '&'; }
+      else { value = scanner.scanUntil(closingTagRe); }
+      if (!scanner.scan(closingTagRe)) throw new Error('Unclosed tag at ' + scanner.pos);
+      if (type == '>') token = [type, value, start, scanner.pos, indentation, tagIndex, lineHasNonSpace];
+      else token = [type, value, start, scanner.pos];
+      tagIndex++;
+      tokens.push(token);
+      if (type === '#' || type === '^') sections.push(token);
+      else if (type === '/') {
+        openSection = sections.pop();
+        if (!openSection) throw new Error('Unopened section "' + value + '" at ' + start);
+        if (openSection[1] !== value) throw new Error('Unclosed section "' + openSection[1] + '" at ' + start);
+      } else if (type === 'name' || type === '{' || type === '&') nonSpace = true;
+      else if (type === '=') compileTags(value);
+    }
+    stripSpace();
+    openSection = sections.pop();
+    if (openSection) throw new Error('Unclosed section "' + openSection[1] + '" at ' + scanner.pos);
+    return nestTokens(squashTokens(tokens));
+  }
+  function squashTokens (tokens) {
+    var squashedTokens = [], token, lastToken;
+    for (var i = 0, numTokens = tokens.length; i < numTokens; ++i) {
+      token = tokens[i];
+      if (token) {
+        if (token[0] === 'text' && lastToken && lastToken[0] === 'text') { lastToken[1] += token[1]; lastToken[3] = token[3]; }
+        else { squashedTokens.push(token); lastToken = token; }
+      }
+    }
+    return squashedTokens;
+  }
+  function nestTokens (tokens) {
+    var nestedTokens = [], collector = nestedTokens, sections = [], token, section;
+    for (var i = 0, numTokens = tokens.length; i < numTokens; ++i) {
+      token = tokens[i];
+      switch (token[0]) {
+        case '#': case '^': collector.push(token); sections.push(token); collector = token[4] = []; break;
+        case '/': section = sections.pop(); section[5] = token[2]; collector = sections.length > 0 ? sections[sections.length - 1][4] : nestedTokens; break;
+        default: collector.push(token);
+      }
+    }
+    return nestedTokens;
+  }
+  function Scanner (string) { this.string = string; this.tail = string; this.pos = 0; }
+  Scanner.prototype.eos = function () { return this.tail === ''; };
+  Scanner.prototype.scan = function (re) { var match = this.tail.match(re); if (!match || match.index !== 0) return ''; var s = match[0]; this.tail = this.tail.substring(s.length); this.pos += s.length; return s; };
+  Scanner.prototype.scanUntil = function (re) { var index = this.tail.search(re), match; switch (index) { case -1: match = this.tail; this.tail = ''; break; case 0: match = ''; break; default: match = this.tail.substring(0, index); this.tail = this.tail.substring(index); } this.pos += match.length; return match; };
+  function Context (view, parentContext) { this.view = view; this.cache = { '.': this.view }; this.parent = parentContext; }
+  Context.prototype.push = function (view) { return new Context(view, this); };
+  Context.prototype.lookup = function (name) {
+    var cache = this.cache, value;
+    if (cache.hasOwnProperty(name)) value = cache[name];
+    else {
+      var context = this, intermediateValue, names, index, lookupHit = false;
+      while (context) {
+        if (name.indexOf('.') > 0) {
+          intermediateValue = context.view; names = name.split('.'); index = 0;
+          while (intermediateValue != null && index < names.length) {
+            if (index === names.length - 1) lookupHit = (hasProperty(intermediateValue, names[index]) || primitiveHasOwnProperty(intermediateValue, names[index]));
+            intermediateValue = intermediateValue[names[index++]];
+          }
+        } else { intermediateValue = context.view[name]; lookupHit = hasProperty(context.view, name); }
+        if (lookupHit) { value = intermediateValue; break; }
+        context = context.parent;
+      }
+      cache[name] = value;
+    }
+    if (isFunction(value)) value = value.call(this.view);
+    return value;
+  };
+  function Writer () { this.templateCache = { _cache: {}, set: function (k, v) { this._cache[k] = v; }, get: function (k) { return this._cache[k]; }, clear: function () { this._cache = {}; } }; }
+  Writer.prototype.clearCache = function () { if (typeof this.templateCache !== 'undefined') this.templateCache.clear(); };
+  Writer.prototype.parse = function (template, tags) {
+    var cache = this.templateCache, cacheKey = template + ':' + (tags || mustache.tags).join(':');
+    var isCacheEnabled = typeof cache !== 'undefined', tokens = isCacheEnabled ? cache.get(cacheKey) : undefined;
+    if (tokens == undefined) { tokens = parseTemplate(template, tags); isCacheEnabled && cache.set(cacheKey, tokens); }
+    return tokens;
+  };
+  Writer.prototype.render = function (template, view, partials, config) {
+    var tags = this.getConfigTags(config), tokens = this.parse(template, tags);
+    var context = (view instanceof Context) ? view : new Context(view, undefined);
+    return this.renderTokens(tokens, context, partials, template, config);
+  };
+  Writer.prototype.renderTokens = function (tokens, context, partials, originalTemplate, config) {
+    var buffer = '', token, symbol, value;
+    for (var i = 0, numTokens = tokens.length; i < numTokens; ++i) {
+      value = undefined; token = tokens[i]; symbol = token[0];
+      if (symbol === '#') value = this.renderSection(token, context, partials, originalTemplate, config);
+      else if (symbol === '^') value = this.renderInverted(token, context, partials, originalTemplate, config);
+      else if (symbol === '>') value = this.renderPartial(token, context, partials, config);
+      else if (symbol === '&') value = this.unescapedValue(token, context);
+      else if (symbol === 'name') value = this.escapedValue(token, context, config);
+      else if (symbol === 'text') value = this.rawValue(token);
+      if (value !== undefined) buffer += value;
+    }
+    return buffer;
+  };
+  Writer.prototype.renderSection = function (token, context, partials, originalTemplate, config) {
+    var self = this, buffer = '', value = context.lookup(token[1]);
+    function subRender (template) { return self.render(template, context, partials, config); }
+    if (!value) return;
+    if (isArray(value)) { for (var j = 0, valueLength = value.length; j < valueLength; ++j) buffer += this.renderTokens(token[4], context.push(value[j]), partials, originalTemplate, config); }
+    else if (typeof value === 'object' || typeof value === 'string' || typeof value === 'number') buffer += this.renderTokens(token[4], context.push(value), partials, originalTemplate, config);
+    else if (isFunction(value)) {
+      if (typeof originalTemplate !== 'string') throw new Error('Cannot use higher-order sections without the original template');
+      value = value.call(context.view, originalTemplate.slice(token[3], token[5]), subRender);
+      if (value != null) buffer += value;
+    } else buffer += this.renderTokens(token[4], context, partials, originalTemplate, config);
+    return buffer;
+  };
+  Writer.prototype.renderInverted = function (token, context, partials, originalTemplate, config) {
+    var value = context.lookup(token[1]);
+    if (!value || (isArray(value) && value.length === 0)) return this.renderTokens(token[4], context, partials, originalTemplate, config);
+  };
+  Writer.prototype.indentPartial = function (partial, indentation, lineHasNonSpace) {
+    var filteredIndentation = indentation.replace(/[^ \t]/g, ''), partialByNl = partial.split('\n');
+    for (var i = 0; i < partialByNl.length; i++) if (partialByNl[i].length && (i > 0 || !lineHasNonSpace)) partialByNl[i] = filteredIndentation + partialByNl[i];
+    return partialByNl.join('\n');
+  };
+  Writer.prototype.renderPartial = function (token, context, partials, config) {
+    if (!partials) return;
+    var tags = this.getConfigTags(config);
+    var value = isFunction(partials) ? partials(token[1]) : partials[token[1]];
+    if (value != null) {
+      var lineHasNonSpace = token[6], tagIndex = token[5], indentation = token[4], indentedValue = value;
+      if (tagIndex == 0 && indentation) indentedValue = this.indentPartial(value, indentation, lineHasNonSpace);
+      var tokens = this.parse(indentedValue, tags);
+      return this.renderTokens(tokens, context, partials, indentedValue, config);
+    }
+  };
+  Writer.prototype.unescapedValue = function (token, context) { var value = context.lookup(token[1]); if (value != null) return value; };
+  Writer.prototype.escapedValue = function (token, context, config) {
+    var escape = this.getConfigEscape(config) || mustache.escape, value = context.lookup(token[1]);
+    if (value != null) return (typeof value === 'number' && escape === mustache.escape) ? String(value) : escape(value);
+  };
+  Writer.prototype.rawValue = function (token) { return token[1]; };
+  Writer.prototype.getConfigTags = function (config) { if (isArray(config)) return config; else if (config && typeof config === 'object') return config.tags; else return undefined; };
+  Writer.prototype.getConfigEscape = function (config) { if (config && typeof config === 'object' && !isArray(config)) return config.escape; else return undefined; };
+  var mustache = {
+    name: 'mustache.js', version: '4.2.0', tags: ['{{', '}}'],
+    clearCache: undefined, escape: undefined, parse: undefined, render: undefined, Scanner: undefined, Context: undefined, Writer: undefined,
+    set templateCache (cache) { defaultWriter.templateCache = cache; },
+    get templateCache () { return defaultWriter.templateCache; }
+  };
+  var defaultWriter = new Writer();
+  mustache.clearCache = function () { return defaultWriter.clearCache(); };
+  mustache.parse = function (template, tags) { return defaultWriter.parse(template, tags); };
+  mustache.render = function (template, view, partials, config) {
+    if (typeof template !== 'string') throw new TypeError('Invalid template! Template should be a "string" but "' + typeStr(template) + '" was given as the first argument for mustache#render(template, view, partials)');
+    return defaultWriter.render(template, view, partials, config);
+  };
+  mustache.escape = escapeHtml;
+  mustache.Scanner = Scanner; mustache.Context = Context; mustache.Writer = Writer;
+  return mustache;
+})));
+</script>
+
+<!-- Default sources (mirrors assets/field-plugin-template/) embedded as text -->
+<script type="text/x-default" id="default-html">
+<div class="plugin-root">
+  <label class="plugin-label default-question-text-size">{{{LABEL}}}</label>
+  {{#HINT}}
+    <p class="plugin-hint default-hint-text-size">{{{HINT}}}</p>
+  {{/HINT}}
+  <input
+    id="plugin-input"
+    class="plugin-input default-answer-text-size"
+    type="text"
+    autocomplete="off"
+    value="{{CURRENT_ANSWER}}"
+  />
+</div>
+</script>
+
+<script type="text/x-default" id="default-css">
+.plugin-root { display: block; padding: 8px 0; font-family: inherit; color: inherit; }
+.plugin-label { display: block; font-weight: 600; margin-bottom: 4px; }
+.plugin-hint { display: block; margin: 0 0 8px 0; opacity: 0.8; }
+.plugin-input {
+  display: block; width: 100%; box-sizing: border-box; padding: 8px 10px;
+  border: 1px solid #ccc; border-radius: 4px; background: #fff; color: inherit;
+}
+.plugin-input:focus { outline: none; border-color: #2c7be5; box-shadow: 0 0 0 3px rgba(44,123,229,0.2); }
+.is-read-only .plugin-input { background: #f5f5f5; cursor: not-allowed; }
+</script>
+
+<script type="text/x-default" id="default-js">
+(function () {
+  var input = document.getElementById('plugin-input');
+  if (!input) { console.warn('[field-plugin] template.html is missing #plugin-input'); return; }
+  if (typeof fieldProperties !== 'undefined' && fieldProperties.READONLY) input.readOnly = true;
+  input.addEventListener('input', function () {
+    if (typeof setAnswer === 'function') setAnswer(input.value);
+  });
+})();
+function clearAnswer() { var i = document.getElementById('plugin-input'); if (i) i.value = ''; }
+function setFocus()    { var i = document.getElementById('plugin-input'); if (i && !i.readOnly) i.focus(); }
+</script>
+
+<script type="text/x-default" id="default-manifest">
+{
+  "name": "template",
+  "author": "SurveyCTO",
+  "version": "0.1.0",
+  "supportedFieldTypes": ["text"]
+}
+</script>
+
+<!-- Harness logic -->
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Default sources ----------------------------------------------
+
+  function readDefault(id) {
+    return (document.getElementById(id).textContent || '').replace(/^\n/, '');
+  }
+  var DEFAULTS = {
+    html: readDefault('default-html'),
+    css: readDefault('default-css'),
+    js: readDefault('default-js'),
+    manifest: readDefault('default-manifest'),
+  };
+
+  // ---------- Fixtures -----------------------------------------------------
+
+  var FIXTURES = {
+    'text — basic': {
+      FIELDTYPE: 'text', LANGUAGE: 'English',
+      LABEL: 'What is your name?',
+      HINT: 'Enter your full legal name.',
+      APPEARANCE: 'custom-template',
+      CONSTRAINTMESSAGE: '', REQUIREDMESSAGE: '',
+      QUESTION_PLACEHOLDER_LABEL: '',
+      READONLY: false,
+      MEDIAIMAGE: '', MEDIAAUDIO: '', MEDIAVIDEO: '',
+      METADATA: '',
+      PARAMETERS: [],
+      PRECONFIGURED_INTENT: false,
+      CURRENT_ANSWER: ''
+    },
+    'text — with parameters': {
+      FIELDTYPE: 'text', LANGUAGE: 'English',
+      LABEL: 'Phone number',
+      HINT: 'Include country code.',
+      APPEARANCE: "custom-template(country='US', placeholder='+1 555-0100')",
+      CONSTRAINTMESSAGE: 'That number does not look right.', REQUIREDMESSAGE: 'Please enter a phone number.',
+      QUESTION_PLACEHOLDER_LABEL: '', READONLY: false,
+      MEDIAIMAGE: '', MEDIAAUDIO: '', MEDIAVIDEO: '',
+      METADATA: '',
+      PARAMETERS: [{ key: 'country', value: 'US' }, { key: 'placeholder', value: '+1 555-0100' }],
+      PRECONFIGURED_INTENT: false,
+      CURRENT_ANSWER: ''
+    },
+    'integer — basic': {
+      FIELDTYPE: 'integer', LANGUAGE: 'English',
+      LABEL: 'How old are you?', HINT: 'In years.',
+      APPEARANCE: 'custom-template', CONSTRAINTMESSAGE: '', REQUIREDMESSAGE: '',
+      QUESTION_PLACEHOLDER_LABEL: '', READONLY: false,
+      MEDIAIMAGE: '', MEDIAAUDIO: '', MEDIAVIDEO: '',
+      METADATA: '', PARAMETERS: [], PRECONFIGURED_INTENT: false,
+      CURRENT_ANSWER: ''
+    },
+    'decimal — basic': {
+      FIELDTYPE: 'decimal', LANGUAGE: 'English',
+      LABEL: 'Weight (kg)', HINT: '',
+      APPEARANCE: 'custom-template', CONSTRAINTMESSAGE: '', REQUIREDMESSAGE: '',
+      QUESTION_PLACEHOLDER_LABEL: '', READONLY: false,
+      MEDIAIMAGE: '', MEDIAAUDIO: '', MEDIAVIDEO: '',
+      METADATA: '', PARAMETERS: [], PRECONFIGURED_INTENT: false,
+      CURRENT_ANSWER: ''
+    },
+    'select_one — three choices': {
+      FIELDTYPE: 'select_one', LANGUAGE: 'English',
+      LABEL: 'Pick a color', HINT: '',
+      APPEARANCE: 'custom-template', CONSTRAINTMESSAGE: '', REQUIREDMESSAGE: '',
+      QUESTION_PLACEHOLDER_LABEL: '', READONLY: false,
+      MEDIAIMAGE: '', MEDIAAUDIO: '', MEDIAVIDEO: '',
+      METADATA: '', PARAMETERS: [], PRECONFIGURED_INTENT: false,
+      CURRENT_ANSWER: '',
+      CHOICES: [
+        { CHOICE_VALUE: 'red',   CHOICE_INDEX: 0, CHOICE_LABEL: 'Red',   CHOICE_SELECTED: false, CHOICE_IMAGE: '' },
+        { CHOICE_VALUE: 'green', CHOICE_INDEX: 1, CHOICE_LABEL: 'Green', CHOICE_SELECTED: false, CHOICE_IMAGE: '' },
+        { CHOICE_VALUE: 'blue',  CHOICE_INDEX: 2, CHOICE_LABEL: 'Blue',  CHOICE_SELECTED: false, CHOICE_IMAGE: '' }
+      ]
+    },
+    'select_multiple — three choices': {
+      FIELDTYPE: 'select_multiple', LANGUAGE: 'English',
+      LABEL: 'Pick all that apply', HINT: '',
+      APPEARANCE: 'custom-template', CONSTRAINTMESSAGE: '', REQUIREDMESSAGE: '',
+      QUESTION_PLACEHOLDER_LABEL: '', READONLY: false,
+      MEDIAIMAGE: '', MEDIAAUDIO: '', MEDIAVIDEO: '',
+      METADATA: '', PARAMETERS: [], PRECONFIGURED_INTENT: false,
+      CURRENT_ANSWER: '',
+      CHOICES: [
+        { CHOICE_VALUE: 'a', CHOICE_INDEX: 0, CHOICE_LABEL: 'Apples',  CHOICE_SELECTED: false, CHOICE_IMAGE: '' },
+        { CHOICE_VALUE: 'b', CHOICE_INDEX: 1, CHOICE_LABEL: 'Bananas', CHOICE_SELECTED: false, CHOICE_IMAGE: '' },
+        { CHOICE_VALUE: 'c', CHOICE_INDEX: 2, CHOICE_LABEL: 'Cherries',CHOICE_SELECTED: false, CHOICE_IMAGE: '' }
+      ]
+    }
+  };
+
+  // ---------- DOM refs -----------------------------------------------------
+
+  var $ = function (sel) { return document.querySelector(sel); };
+  var srcEditors = {
+    html:     $('#src-html'),
+    css:      $('#src-css'),
+    js:       $('#src-js'),
+    manifest: $('#src-manifest')
+  };
+  var fixtureSelect = $('#fixture-select');
+  var fixtureJson   = $('#fixture-json');
+  var langInput     = $('#lang-input');
+  var iframe        = $('#preview');
+  var outAnswer     = $('#out-answer');
+  var outMetadata   = $('#out-metadata');
+  var outLog        = $('#out-log');
+  var renderStatus  = $('#render-status');
+
+  // ---------- Harness state ------------------------------------------------
+
+  var state = {
+    platform: 'web-collect',
+    readonly: false,
+    fixtureName: 'text — basic',
+    answer: undefined,
+    metadata: '',
+    debounceTimer: null,
+    iframeReady: false,
+    // Populated by "Load folder…" / "Load files…" so the harness can faithfully
+    // mirror SurveyCTO's load order: externalCss → style.css; externalJs →
+    // script.js; and replace {{PLUGINDIR}}/<file> with data URIs for any
+    // plug-in attachments shipped alongside the four core files.
+    //
+    // Inline / artifact mode does not populate these — see README's "Limits".
+    extras: {
+      externalCss: [], // [{name, text}, ...]
+      externalJs:  [], // [{name, text}, ...]
+      attachments: {}  // { basename: dataURL }
+    }
+  };
+
+  function clearExtras() {
+    state.extras = { externalCss: [], externalJs: [], attachments: {} };
+  }
+
+  function describeExtras() {
+    var css = state.extras.externalCss.map(function (f) { return f.name; });
+    var js  = state.extras.externalJs.map(function (f) { return f.name; });
+    var att = Object.keys(state.extras.attachments);
+    var out = [];
+    if (css.length) out.push('externalCss: ' + css.join(', '));
+    if (js.length)  out.push('externalJs: '  + js.join(', '));
+    if (att.length) out.push('attachments: ' + att.join(', '));
+    return out.join(' · ');
+  }
+
+  function init() {
+    // Populate editors
+    for (var k in srcEditors) srcEditors[k].value = DEFAULTS[k];
+    // Populate fixture select
+    Object.keys(FIXTURES).forEach(function (name) {
+      var opt = document.createElement('option');
+      opt.value = name; opt.textContent = name;
+      fixtureSelect.appendChild(opt);
+    });
+    fixtureSelect.value = state.fixtureName;
+    fixtureJson.value = JSON.stringify(FIXTURES[state.fixtureName], null, 2);
+
+    // Tabs
+    document.querySelectorAll('#src-tabs .tab').forEach(function (t) {
+      t.addEventListener('click', function () { selectTab(t.dataset.tab); });
+    });
+
+    // Toggle rows
+    document.querySelectorAll('.toggle-row').forEach(function (row) {
+      row.addEventListener('click', function (e) {
+        var btn = e.target.closest('.btn'); if (!btn) return;
+        var which = row.dataset.toggle;
+        if (which === 'platform') {
+          row.querySelectorAll('.btn').forEach(function (b) { b.classList.remove('on'); });
+          btn.classList.add('on');
+          state.platform = btn.dataset.value;
+          render();
+        } else if (which === 'readonly') {
+          row.querySelectorAll('.btn').forEach(function (b) { b.classList.remove('on'); });
+          btn.classList.add('on');
+          state.readonly = btn.dataset.value === 'on';
+          render();
+        }
+      });
+    });
+
+    // Auto-render with debounce on edits
+    Object.keys(srcEditors).forEach(function (k) {
+      srcEditors[k].addEventListener('input', scheduleRender);
+    });
+    fixtureSelect.addEventListener('change', function () {
+      state.fixtureName = fixtureSelect.value;
+      fixtureJson.value = JSON.stringify(FIXTURES[state.fixtureName], null, 2);
+      render();
+    });
+    fixtureJson.addEventListener('input', scheduleRender);
+    langInput.addEventListener('input', scheduleRender);
+
+    // Action buttons
+    document.querySelectorAll('button[data-action]').forEach(function (b) {
+      b.addEventListener('click', function () { invoke(b.dataset.action); });
+    });
+
+    $('#btn-render').addEventListener('click', render);
+    $('#btn-reset').addEventListener('click', function () {
+      for (var k in srcEditors) srcEditors[k].value = DEFAULTS[k];
+      clearExtras();
+      state.fixtureName = 'text — basic';
+      fixtureSelect.value = state.fixtureName;
+      fixtureJson.value = JSON.stringify(FIXTURES[state.fixtureName], null, 2);
+      log('ok', 'Reset to bundled template.');
+      render();
+    });
+    $('#btn-clear-log').addEventListener('click', function () { outLog.textContent = ''; });
+    $('#btn-load-folder').addEventListener('click', function () { $('#file-folder').click(); });
+    $('#btn-load-files').addEventListener('click',  function () { $('#file-multi').click();  });
+    $('#file-folder').addEventListener('change', onFilesPicked);
+    $('#file-multi').addEventListener('change',  onFilesPicked);
+
+    // Listen for messages from the iframe
+    window.addEventListener('message', onIframeMessage);
+
+    render();
+  }
+
+  function selectTab(name) {
+    document.querySelectorAll('#src-tabs .tab').forEach(function (t) {
+      t.classList.toggle('active', t.dataset.tab === name);
+    });
+    Object.keys(srcEditors).forEach(function (k) {
+      srcEditors[k].hidden = (k !== name);
+    });
+  }
+
+  function scheduleRender() {
+    clearTimeout(state.debounceTimer);
+    state.debounceTimer = setTimeout(render, 250);
+  }
+
+  function setStatus(kind, text) {
+    renderStatus.className = 'pill ' + (kind || '');
+    renderStatus.textContent = text;
+  }
+
+  function log(kind, msg) {
+    var line = document.createElement('div');
+    line.className = 'e-' + kind;
+    var ts = new Date().toLocaleTimeString();
+    line.textContent = '[' + ts + '] ' + msg;
+    outLog.appendChild(line);
+    outLog.scrollTop = outLog.scrollHeight;
+  }
+
+  // ---------- Files picker -------------------------------------------------
+
+  function onFilesPicked(ev) {
+    var files = Array.from(ev.target.files || []);
+    // Reset the input first so the same selection can be re-picked
+    ev.target.value = '';
+    if (!files.length) return;
+
+    var CORE = ['manifest.json', 'template.html', 'style.css', 'script.js'];
+    var byName = {};
+    files.forEach(function (f) {
+      // f.webkitRelativePath includes the folder prefix; field plug-ins are
+      // flat at the zip root, so we key by basename. If a folder accidentally
+      // contains nested files with the same basename, the first wins (which
+      // mirrors how SurveyCTO would reject duplicates after flattening).
+      var name = (f.webkitRelativePath || f.name).split('/').pop();
+      if (!byName[name]) byName[name] = f;
+    });
+
+    var coreFound = CORE.filter(function (n) { return byName[n]; });
+    if (coreFound.length === 0) {
+      log('err', 'No plug-in core files (' + CORE.join(', ') + ') were found in the selection.');
+      return;
+    }
+
+    // Phase 1 — read core files as text (one-shot Promise.all-style flow).
+    var coreReads = coreFound.map(function (n) { return readAsText(byName[n]).then(function (text) { return { n: n, text: text }; }); });
+
+    Promise.all(coreReads).then(function (coreResults) {
+      var keys = { 'manifest.json': 'manifest', 'template.html': 'html', 'style.css': 'css', 'script.js': 'js' };
+      coreResults.forEach(function (r) { srcEditors[keys[r.n]].value = r.text; });
+
+      // Phase 2 — parse manifest to find externalCss / externalJs lists.
+      var manifest;
+      try { manifest = JSON.parse(srcEditors.manifest.value); }
+      catch (e) { manifest = {}; log('warn', 'manifest.json failed to parse: ' + e.message); }
+      var extCssNames = Array.isArray(manifest.externalCss) ? manifest.externalCss.slice() : [];
+      var extJsNames  = Array.isArray(manifest.externalJs)  ? manifest.externalJs.slice()  : [];
+
+      clearExtras();
+      var missingExternals = [];
+
+      // SurveyCTO loads externalCss / externalJs in manifest-declared order.
+      // Reads complete asynchronously, so we must preserve declared order
+      // explicitly: read each name into an indexed slot, then materialize
+      // the final array in order. Otherwise dependency chains (e.g. jQuery
+      // plug-ins) can preview differently from SurveyCTO.
+      function readListInOrder(names, kind) {
+        var present = names.filter(function (name) {
+          if (!byName[name]) { missingExternals.push(name); return false; }
+          return true;
+        });
+        var slots = new Array(present.length);
+        return Promise.all(present.map(function (name, i) {
+          return readAsText(byName[name]).then(function (text) {
+            slots[i] = { name: name, text: text };
+          });
+        })).then(function () { return slots; });
+      }
+
+      // Everything else (not core, not in externalCss/externalJs) is treated
+      // as a plug-in attachment and read as a data URL keyed by basename.
+      // Order doesn't matter here — substitution is by basename.
+      var attachmentNames = Object.keys(byName).filter(function (n) {
+        return CORE.indexOf(n) === -1 && extCssNames.indexOf(n) === -1 && extJsNames.indexOf(n) === -1;
+      });
+      var attachmentReads = attachmentNames.map(function (name) {
+        return readAsDataURL(byName[name]).then(function (url) {
+          state.extras.attachments[name] = url;
+        });
+      });
+
+      Promise.all([
+        readListInOrder(extCssNames, 'css'),
+        readListInOrder(extJsNames,  'js'),
+        Promise.all(attachmentReads),
+      ]).then(function (parts) {
+        state.extras.externalCss = parts[0];
+        state.extras.externalJs  = parts[1];
+
+        var missingCore = CORE.filter(function (n) { return !byName[n]; });
+        if (missingCore.length) log('warn', 'Loaded; missing core files left untouched: ' + missingCore.join(', '));
+        if (missingExternals.length) log('err', 'manifest references files not in the selection: ' + missingExternals.join(', '));
+        var summary = describeExtras();
+        log('ok', 'Loaded plug-in source from disk.' + (summary ? ' (' + summary + ')' : ''));
+        render();
+      }).catch(function (err) {
+        log('err', 'Failed to read additional files: ' + (err && err.message || err));
+        render();
+      });
+    }).catch(function (err) {
+      log('err', 'Failed to read core files: ' + (err && err.message || err));
+    });
+  }
+
+  function readAsText(file) {
+    return new Promise(function (resolve, reject) {
+      var r = new FileReader();
+      r.onload = function () { resolve(r.result); };
+      r.onerror = function () { reject(r.error || new Error('read failed: ' + file.name)); };
+      r.readAsText(file);
+    });
+  }
+
+  function readAsDataURL(file) {
+    return new Promise(function (resolve, reject) {
+      var r = new FileReader();
+      r.onload = function () { resolve(r.result); };
+      r.onerror = function () { reject(r.error || new Error('read failed: ' + file.name)); };
+      r.readAsDataURL(file);
+    });
+  }
+
+  // ---------- Render -------------------------------------------------------
+
+  function getFieldProperties() {
+    var props;
+    try { props = JSON.parse(fixtureJson.value); }
+    catch (e) {
+      log('err', 'Fixture JSON is invalid: ' + e.message);
+      props = FIXTURES[state.fixtureName] || FIXTURES['text — basic'];
+    }
+    if (state.readonly) props.READONLY = true;
+    if (langInput.value) props.LANGUAGE = langInput.value;
+    return props;
+  }
+
+  function manifestObj() {
+    try { return JSON.parse(srcEditors.manifest.value); }
+    catch (e) { log('warn', 'manifest.json failed to parse: ' + e.message); return {}; }
+  }
+
+  // SurveyCTO derives the `language-<x>` class by lowercasing the active
+  // language and replacing special characters/spaces with hyphens
+  // (e.g. "idioma español" → "language-idioma-espanol"). Diacritics are
+  // stripped via NFD normalization before the substitution.
+  function normalizeLangClass(s) {
+    var t = String(s).normalize ? String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '') : String(s);
+    t = t.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return t || 'default';
+  }
+
+  function render() {
+    state.iframeReady = false;
+    state.answer = undefined;
+    setStatus('warn', 'rendering…');
+
+    var html, css, js, props, manifest;
+    try {
+      html = srcEditors.html.value;
+      css = srcEditors.css.value;
+      js  = srcEditors.js.value;
+      props = getFieldProperties();
+      manifest = manifestObj();
+    } catch (e) {
+      setStatus('err', 'error');
+      log('err', 'Could not gather sources: ' + e.message);
+      return;
+    }
+
+    outAnswer.innerHTML = '<em style="color:var(--muted)">(none)</em>';
+    state.metadata = String(props.METADATA || '');
+    if (state.metadata) outMetadata.textContent = state.metadata;
+    else outMetadata.innerHTML = '<em style="color:var(--muted)">(none)</em>';
+
+    // Concatenate manifest-listed externalCss / externalJs in declared order
+    // before the core style.css / script.js so load order matches SurveyCTO.
+    var extCssText = state.extras.externalCss.map(function (f) { return '/* externalCss: ' + f.name + ' */\n' + f.text; }).join('\n');
+    var extJsText  = state.extras.externalJs.map(function (f)  { return '// externalJs: ' + f.name + '\n' + f.text; }).join('\n');
+    var fullCss = (extCssText ? extCssText + '\n' : '') + css;
+    var fullJs  = (extJsText  ? extJsText  + '\n' : '') + js;
+
+    // SurveyCTO replaces {{PLUGINDIR}} via plain search-and-replace in
+    // template.html, style.css, AND script.js before rendering. Mirror that.
+    // For attachments loaded via "Load folder…", substitute
+    //   {{PLUGINDIR}}/<filename>
+    // with a data: URL keyed by basename. Anything not matched falls back to
+    // a placeholder path so the source is still well-formed.
+    var pluginDir = '/__pluginDir__';
+    function substPluginDir(text) {
+      // Specific {{PLUGINDIR}}/<name> patterns first (longest match wins)
+      var attachmentNames = Object.keys(state.extras.attachments).sort(function (a, b) { return b.length - a.length; });
+      attachmentNames.forEach(function (name) {
+        var re = new RegExp('\\{\\{PLUGINDIR\\}\\}/' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        text = text.replace(re, state.extras.attachments[name]);
+      });
+      // Whatever is left falls back to a placeholder path
+      return text.replace(/\{\{PLUGINDIR\}\}/g, pluginDir);
+    }
+    html    = substPluginDir(html);
+    fullCss = substPluginDir(fullCss);
+    fullJs  = substPluginDir(fullJs);
+
+    var rendered;
+    try {
+      rendered = window.Mustache.render(html, props);
+    } catch (e) {
+      setStatus('err', 'mustache error');
+      log('err', 'Mustache render failed: ' + e.message);
+      return;
+    }
+
+    var docClasses = [state.platform];
+    if (props.READONLY) docClasses.push('is-read-only');
+    if (props.LANGUAGE) docClasses.push('language-' + normalizeLangClass(props.LANGUAGE));
+
+    var srcdoc = buildSrcdoc({
+      classes: docClasses.join(' '),
+      css: fullCss,
+      bodyHtml: rendered,
+      js: fullJs,
+      fieldProperties: props,
+      manifest: manifest
+    });
+
+    iframe.srcdoc = srcdoc;
+    setStatus('ok', 'rendered');
+  }
+
+  function buildSrcdoc(opts) {
+    var bridge = bridgeScript();
+    var jsonProps = JSON.stringify(opts.fieldProperties);
+    var jsonManifest = JSON.stringify(opts.manifest);
+    return [
+      '<!doctype html>',
+      '<html class="' + escAttr(opts.classes) + '">',
+      '<head><meta charset="utf-8"><style>' + opts.css + '</style></head>',
+      '<body class="' + escAttr(opts.classes) + '">',
+      opts.bodyHtml,
+      '<script>(function(){',
+      'window.fieldProperties = ' + jsonProps + ';',
+      'window.__manifest = ' + jsonManifest + ';',
+      bridge,
+      '})();<\/script>',
+      '<script>\n' + opts.js + '\n//# sourceURL=plugin-script.js\n<\/script>',
+      '<script>parent.postMessage({type:"ready"}, "*");<\/script>',
+      '</body></html>'
+    ].join('\n');
+  }
+
+  function escAttr(s) { return String(s).replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+
+  // The bridge runs inside the iframe. It defines all host-provided global
+  // functions and proxies their effects back to the parent via postMessage.
+  // Keep this stringified — it's emitted into the iframe srcdoc.
+  function bridgeScript() {
+    return [
+      'function __post(t, p){ try{ parent.postMessage(Object.assign({type:t}, p||{}), "*"); }catch(e){} }',
+      'function __log(level, msg){ __post("log", {level:level, msg:msg}); }',
+      // Mirror console.* to the parent log
+      '["log","info","warn","error"].forEach(function(k){ var orig=console[k]; console[k]=function(){',
+      '  try{ __log(k==="error"?"err":(k==="warn"?"warn":"info"), Array.from(arguments).map(function(a){',
+      '    try{ return typeof a==="string"?a:JSON.stringify(a); }catch(_){ return String(a); }',
+      '  }).join(" ")); }catch(_){}',
+      '  return orig && orig.apply(console, arguments);',
+      '}; });',
+      'window.onerror = function(m, src, ln, col, err){ __log("err", "[uncaught] " + (err && err.stack ? err.stack : m)); };',
+      // Required host-provided functions.
+      // __metadata is seeded from fieldProperties.METADATA so getMetaData()
+      // returns the most recent value: any setMetaData() call wins, and a
+      // fresh load reflects whatever the fixture supplied.
+      'window.__metadata = (window.fieldProperties && window.fieldProperties.METADATA) || "";',
+      'window.setAnswer = function(v){ __post("setAnswer", {value:v}); };',
+      'window.setMetaData = function(s){ window.__metadata = String(s); __post("setMetaData", {value:String(s)}); };',
+      'window.getMetaData = function(){ return window.__metadata; };',
+      'window.getPluginParameter = function(key){',
+      '  var ps = (window.fieldProperties && window.fieldProperties.PARAMETERS) || [];',
+      '  for (var i=0;i<ps.length;i++) if (ps[i] && ps[i].key === key) return ps[i].value;',
+      '  return undefined;',
+      '};',
+      'window.goToNextField = function(skip){ __post("nav", {dir:"next", skipValidation: skip===undefined?false:!!skip}); __log("call","goToNextField(skipValidation=" + (skip===undefined?false:!!skip) + ")"); };',
+      'window.goToPreviousField = function(skip){ __post("nav", {dir:"prev", skipValidation: skip===undefined?true:!!skip}); __log("call","goToPreviousField(skipValidation=" + (skip===undefined?true:!!skip) + ")"); };',
+      // Android-only stubs. Per the upstream API reference, callbacks are
+      // (error, result) — callers commonly check `if (error)` before
+      // inspecting `result`. Mirror that contract so harness behavior matches
+      // SurveyCTO Collect rather than introducing latent bugs.
+      'window.showSoftKeyboard = function(){ __log("warn","showSoftKeyboard() is Android-only; harness no-op."); };',
+      'window.launchPreconfiguredIntent = function(cb){',
+      '  __log("warn","launchPreconfiguredIntent() is Android-only; harness no-op.");',
+      '  if(typeof cb==="function") cb("unsupported on harness", null);',
+      '};',
+      'window.launchIntent = function(name, params, cb){',
+      '  __log("warn","launchIntent("+JSON.stringify(name)+", "+JSON.stringify(params)+") is Android-only; harness no-op.");',
+      '  if(typeof cb==="function") cb("unsupported on harness", null);',
+      '};',
+      // makePhoneCall takes (phoneNumber, phoneNumberLabel?, hidePhoneNumber?, callback(error, result)).
+      // The callback is the last function-typed argument.
+      'window.makePhoneCall = function(){',
+      '  var args = Array.prototype.slice.call(arguments);',
+      '  var cb = null;',
+      '  for (var i = args.length - 1; i >= 0; i--) { if (typeof args[i] === "function") { cb = args[i]; break; } }',
+      '  __log("warn","makePhoneCall("+args.filter(function(a){return typeof a !== "function";}).map(function(a){return JSON.stringify(a);}).join(", ")+") is Android-only; harness no-op.");',
+      '  if (cb) cb("unsupported on harness", null);',
+      '};',
+      'window.getPhoneCallStatus = function(cb){',
+      '  __log("warn","getPhoneCallStatus() is Android-only; harness no-op.");',
+      '  if(typeof cb==="function") cb("unsupported on harness", null);',
+      '};',
+      // Receive parent invocations
+      'window.addEventListener("message", function(e){',
+      '  var d = e.data || {};',
+      '  if (d.type !== "invoke") return;',
+      '  var fn = window[d.name];',
+      '  if (typeof fn !== "function") { __post("notDefined", {name:d.name}); return; }',
+      '  try { fn.apply(null, d.args || []); __post("invoked", {name:d.name}); }',
+      '  catch (err) { __log("err", "[invoke "+d.name+"] " + (err && err.stack || err)); }',
+      '});'
+    ].join('\n');
+  }
+
+  // ---------- iframe message handling --------------------------------------
+
+  function onIframeMessage(ev) {
+    var d = ev.data || {};
+    if (!d || typeof d !== 'object') return;
+    switch (d.type) {
+      case 'ready':
+        state.iframeReady = true;
+        log('ok', 'Plug-in script loaded.');
+        break;
+      case 'log':
+        log(d.level || 'info', d.msg || '');
+        break;
+      case 'setAnswer':
+        state.answer = d.value;
+        outAnswer.textContent = formatAnswer(d.value);
+        log('call', 'setAnswer(' + formatAnswer(d.value) + ')');
+        break;
+      case 'setMetaData':
+        state.metadata = d.value;
+        outMetadata.textContent = d.value || '';
+        log('call', 'setMetaData(' + JSON.stringify(d.value) + ')');
+        break;
+      case 'nav':
+        log('call', '→ would navigate ' + d.dir + ' (skipValidation=' + d.skipValidation + ')');
+        break;
+      case 'invoked':
+        log('ok', d.name + '() returned.');
+        break;
+      case 'notDefined':
+        log('warn', d.name + '() is not defined on the plug-in.');
+        break;
+    }
+  }
+
+  function formatAnswer(v) {
+    if (v === undefined || v === null) return '(none)';
+    if (typeof v === 'string') return JSON.stringify(v);
+    try { return JSON.stringify(v); } catch (_) { return String(v); }
+  }
+
+  // ---------- Invoking plug-in functions from the parent -------------------
+
+  function invoke(name) {
+    if (!iframe.contentWindow) { log('err', 'iframe is not ready.'); return; }
+    var args = [];
+    if (name === 'handleRequiredMessage')   args = ['Please answer this question.'];
+    if (name === 'handleConstraintMessage') args = ['Out of range.'];
+
+    // In SurveyCTO, the host clears the field's saved answer first and then
+    // calls clearAnswer() so the plug-in can reset its UI. Mirror that order
+    // here so the harness's "current answer" panel doesn't show a stale value
+    // even when the plug-in's clearAnswer() correctly avoids calling
+    // setAnswer('').
+    if (name === 'clearAnswer') {
+      state.answer = undefined;
+      outAnswer.innerHTML = '<em style="color:var(--muted)">(none)</em>';
+    }
+
+    iframe.contentWindow.postMessage({ type: 'invoke', name: name, args: args }, '*');
+  }
+
+  init();
+})();
+</script>
+
+</body>
+</html>
