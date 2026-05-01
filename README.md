@@ -45,40 +45,56 @@ The full integration reference (tool surface, recommended workflow, concurrency 
 
 **Latest stable release (always up to date):**
 
-[surveycto-skill.zip](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip)
+[**surveycto-skill.zip**](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip)
 
-This URL always points to the most recent release. You can also browse all releases on the [releases page](../../releases).
+This URL always points to the most recent release. You can also browse all releases on the [releases page](../../releases). The same zip is used for every host below. Pair it with the **SurveyCTO MCP server** at `https://assistant-be.surveycto.net/mcp` for the best experience — the per-host steps below cover both pieces.
 
 ## Installation
 
-### Claude.ai / Claude Cowork
+For the best experience, install **both** the skill and the SurveyCTO MCP server in your agent host. The skill works on its own, but the MCP server adds purpose-built XLSForm tools and live knowledge-base search.
 
-1. Download [surveycto-skill.zip](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip)
-2. Open **Settings** > **Features** (or the **Customize** page)
-3. Upload the zip file
+### Claude Cowork
 
-### Claude Code
+Claude Cowork has a UI for both pieces.
 
-Install as a plugin:
+1. Open the sidebar and click **Customize**.
+2. Click **Create skill… → Upload a skill** and upload [surveycto-skill.zip](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip).
+3. Click into **Connectors** and then **Add custom connector**.
+4. Enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
+5. Once the connector is added, click **Always allow** for each of the SurveyCTO tools.
 
-```bash
-# If this repo is registered as a plugin marketplace:
-/plugin install surveycto-agent-skill
+### OpenAI Codex
 
-# Or install directly from GitHub:
-/plugin install surveycto/surveycto-agent-skill
-```
-
-Or install manually as a personal skill:
+As of this writing, Codex doesn't have a UI for managing skills, so install the skill by unzipping it into `~/.agents/skills/surveycto`:
 
 ```bash
-git clone https://github.com/surveycto/surveycto-agent-skill.git
-cp -r surveycto-agent-skill ~/.claude/skills/surveycto
+mkdir -p ~/.agents/skills/surveycto
+unzip surveycto-skill.zip -d ~/.agents/skills/surveycto
 ```
+
+Codex *does* have a UI for MCP servers:
+
+1. Open Codex settings and click **MCP servers**.
+2. Click **+ Add server**, then enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
+3. If SurveyCTO capabilities don't appear in new chats, restart Codex.
+
+When Codex starts using SurveyCTO capabilities it will prompt for permission on every tool call. Select **Always allow** in those prompts to permanently approve each tool, so Codex gets less tiresome to use and can work more independently over time.
 
 ### Other Agent Skills-compatible tools
 
-This skill follows the [Agent Skills](https://agentskills.io) open standard. For tools like Cursor, VS Code Copilot, Gemini CLI, Roo Code, and others, consult their documentation for installing agent skills. The skill directory can typically be placed in the tool's skills folder.
+This skill follows the [Agent Skills](https://agentskills.io) open standard. For tools like Claude Code, Cursor, VS Code Copilot, Gemini CLI, Roo Code, and others, consult the host's documentation for installing skills and MCP servers. In general:
+
+- **Skill**: extract `surveycto-skill.zip` into the host's skills directory (often `~/.<host>/skills/surveycto` or similar).
+- **MCP server**: register `https://assistant-be.surveycto.net/mcp` (Streamable HTTP, no auth). For stdio-only clients, wrap it with `mcp-remote`:
+
+  ```json
+  {
+    "surveycto": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://assistant-be.surveycto.net/mcp"]
+    }
+  }
+  ```
 
 ## Usage
 
@@ -103,21 +119,32 @@ The skill version is stored in the `metadata.version` field in `SKILL.md` frontm
 ```yaml
 metadata:
   author: SurveyCTO
-  version: "1.0"
+  version: "1.0.0-beta"
 ```
 
-When merging `develop` into `main`, bump this version number first. The release workflow reads it to create the Git tag and GitHub Release name (e.g., `"1.1"` → tag `v1.1`, release `v1.1`).
+When merging `develop` into `main`, bump this version number first. The release workflow reads it to create the Git tag and GitHub Release name (e.g., `"1.0.0-beta"` → tag `v1.0.0-beta`, release `v1.0.0-beta`).
 
 Use [semantic versioning](https://semver.org):
 
-- **Patch** (1.0 → 1.0.1): Fix incorrect information, typos, or clarify existing guidance
-- **Minor** (1.0 → 1.1): Add new content (new reference sections, new patterns, template updates)
-- **Major** (1.1 → 2.0): Structural changes that may affect how agents use the skill
+- **Pre-release** (`1.0.0-beta`, `1.0.0-beta.2`, `1.0.0-rc.1`): Public beta and release-candidate builds before the first stable `1.0.0`
+- **Patch** (1.0.0 → 1.0.1): Fix incorrect information, typos, or clarify existing guidance
+- **Minor** (1.0.0 → 1.1.0): Add new content (new reference sections, new patterns, template updates)
+- **Major** (1.x → 2.0.0): Structural changes that may affect how agents use the skill
 
 ### Building the zip locally
 
 ```bash
-zip -r surveycto-skill.zip . -x '.*' -x '.git/*' -x '.github/*' -x 'README.md' -x 'LICENSE' -x '*.zip'
+zip -r surveycto-skill.zip . \
+  -x '.git/*' \
+  -x '.github/*' \
+  -x '.gitignore' \
+  -x 'README.md' \
+  -x 'LICENSE' \
+  -x '*.zip' \
+  -x '.DS_Store' \
+  -x 'Thumbs.db' \
+  -x '**/.DS_Store' \
+  -x '**/Thumbs.db'
 ```
 
 ### Making changes

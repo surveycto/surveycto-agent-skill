@@ -28,7 +28,11 @@ jobs:
             -x '.gitignore' \
             -x 'README.md' \
             -x 'LICENSE' \
-            -x '*.zip'
+            -x '*.zip' \
+            -x '.DS_Store' \
+            -x 'Thumbs.db' \
+            -x '**/.DS_Store' \
+            -x '**/Thumbs.db'
 
       - name: Create or update release
         uses: softprops/action-gh-release@v2
