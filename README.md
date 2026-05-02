@@ -161,20 +161,21 @@ zip -r surveycto-skill.zip . \
 
 ## Maintaining the primers
 
-The five primers in `references/` have two different maintenance models, depending on whether the public documentation actually covers the topic.
+The six primers in `references/` have two different maintenance models, depending on whether the public documentation actually covers the topic.
 
 ### Docs-derived primers (regenerated periodically)
 
-`overview.md`, `xlsform.md`, and `expressions.md` cover material that `docs.surveycto.com` documents thoroughly. They are intended to be regenerated periodically from a careful, top-down read of the live docs as the underlying product changes and as more capable AI agents become available. The prompts below are designed for a very capable AI agent with web-fetch and file-write capabilities — paste one into a fresh session, let it run, and replace the corresponding file with the result. (The initial versions were built by
-ChatGPT Codex with GPT-5.5 High in VS Code.)
+`overview.md`, `xlsform.md`, `expressions.md`, and `field-plugins.md` cover material that is documented in public SurveyCTO sources. The first three are primarily derived from `docs.surveycto.com`; `field-plugins.md` is primarily derived from the SurveyCTO `field-plug-in-resources` GitHub developer docs, with product docs and support articles as secondary sources. They are intended to be refreshed periodically from a careful read of the live sources as the underlying product changes and as more capable AI agents become available. The prompts below are designed for a very capable AI agent with web-fetch and file-write capabilities — paste one into a fresh session, let it run, and replace the corresponding materials with the result. (The initial versions were built by ChatGPT Codex with GPT-5.5 High in VS Code.)
 
-**Order matters.** Generate them top-down so each lower-level primer can rely on the higher-level ones:
+**Order matters** for the core SurveyCTO primers. Generate them top-down so each lower-level primer can rely on the higher-level ones:
 
 1. `overview.md` (highest-level — generate first)
 2. `xlsform.md`
 3. `expressions.md`
 
-Each primer should be self-contained enough to be served standalone via the MCP `get_surveycto_primer` tool, but should cross-link to the others where helpful. Use Markdown, prefer tables for column/option/function reference content, and link back to canonical pages on `docs.surveycto.com` and `support.surveycto.com` so a reader can always go deeper.
+`field-plugins.md` can be refreshed independently after those are stable, but should cross-link to `xlsform.md` and `expressions.md` where it discusses `appearance`, parameters, and `plug-in-metadata()`.
+
+Each primer should be self-contained enough to be served standalone via the MCP `get_surveycto_primer` tool, but should cross-link to the others where helpful. Use Markdown, prefer tables for column/option/function reference content, and link back to canonical pages on `docs.surveycto.com`, `support.surveycto.com`, and the relevant SurveyCTO GitHub repositories so a reader can always go deeper.
 
 ### Source-code-derived primers (bespoke, occasional)
 
@@ -390,9 +391,86 @@ Before you conclude, double-check everything for accuracy. Mistakes in these
 primers can affect vital work done by SurveyCTO users.
 ```
 
+### Prompt 4 — Field plug-in materials
+
+```text
+You are refreshing the SurveyCTO agent skill's field plug-in authoring
+materials. The goal is to keep the bundled reference and scaffolding aligned
+with the current SurveyCTO field plug-in developer documentation, without
+regressing the skill's offline usefulness for IDE-based coding agents.
+
+Work in the `surveycto-agent-skill` repo. Read the current files first:
+- `references/field-plugins.md`
+- `SKILL.md` sections that mention field plug-ins
+- `assets/field-plugin-template/`
+- `assets/field-plugin-test-harness/README.md`
+- `assets/field-plugin-test-harness/validate.mjs`
+- `assets/field-plugin-test-harness/preview.html`
+
+Then read the live authoritative sources carefully:
+- https://github.com/surveycto/field-plug-in-resources/blob/master/docs/developer-docs-home.md
+- https://github.com/surveycto/field-plug-in-resources/blob/master/docs/plug-in-definition.md
+- https://github.com/surveycto/field-plug-in-resources/blob/master/docs/api-reference.md
+- https://docs.surveycto.com/02-designing-forms/03-advanced-topics/06.using-field-plug-ins.html
+- https://docs.surveycto.com/02-designing-forms/03-advanced-topics/07.testing-field-plug-ins.html
+- https://support.surveycto.com/hc/en-us/articles/360045235134-Field-plug-in-catalog
+- https://support.surveycto.com/hc/en-us/articles/360052426933-Guide-to-creating-field-plug-ins
+- https://support.surveycto.com/hc/en-us/articles/360045234534-Guide-to-field-plug-ins-how-to-customize-fields
+- https://www.surveycto.com/data-collection-quality/build-field-plugins-genai/
+
+Also inspect the current SurveyCTO baseline and feature-demo repositories for
+changes in conventions, examples, or packaging assumptions:
+- https://github.com/surveycto/baseline-text
+- https://github.com/surveycto/baseline-integer
+- https://github.com/surveycto/baseline-decimal
+- https://github.com/surveycto/baseline-select_one
+- https://github.com/surveycto/baseline-select_multiple
+- https://github.com/surveycto/feature-demo-parameters
+- https://github.com/surveycto/feature-demo-metadata
+- https://github.com/surveycto/feature-demo-intents
+
+Update only what the sources justify. Preserve concise, agent-usable guidance;
+do not expand into a verbatim copy of the upstream docs. In particular:
+- Refresh `references/field-plugins.md` so it accurately covers the current
+  bundle anatomy, manifest schema, supported field types, packaging rules,
+  Mustache/template behavior, form API, runtime CSS classes, provided and
+  called JavaScript functions, parameter and metadata behavior, using a
+  plug-in in an XLSForm, testing workflow, recommended baselines, sharing
+  conventions, and common pitfalls.
+- Keep the primer self-contained for offline agent use, but include canonical
+  links back to the GitHub developer docs, product docs, and support articles.
+- Open the primer with an HTML comment block like:
+  `<!-- PRIMER: field-plugins\n  STATUS: refreshed YYYY-MM-DD from field-plug-in-resources and SurveyCTO docs -->`.
+- Check whether `SKILL.md` still gives the right minimal routing and workflow
+  guidance for field plug-ins. Keep `SKILL.md` brief; defer detailed API
+  content to `references/field-plugins.md`.
+- Check whether `assets/field-plugin-template/` still matches current baseline
+  conventions. Update the template only when the upstream docs or baselines
+  show a concrete change. Keep it minimal and generic.
+- Check whether `assets/field-plugin-test-harness/validate.mjs` and
+  `preview.html` still validate and simulate the current documented runtime
+  behavior. Update them only for concrete doc/API changes or clear bugs. Do
+  not add npm dependencies; the harness should remain zero-dependency and
+  usable offline.
+- Keep all edited files ASCII unless an existing file or upstream API name
+  requires otherwise.
+
+Validation:
+- Run the field plug-in harness validator against `assets/field-plugin-template/`.
+- If the repo has tests or lint/build scripts relevant to the changed files,
+  run them.
+- Manually check that every field plug-in source link in
+  `references/field-plugins.md` still resolves.
+- Summarize which upstream changes were incorporated and which files changed.
+
+Before you conclude, double-check everything for accuracy. Mistakes in these
+materials can affect production SurveyCTO forms and user-facing data collection
+workflows.
+```
+
 ### Syncing primers to the MCP server
 
-The [SurveyCTO MCP server](https://github.com/SurveyCTO/scto-assistant-be) vendors these primers under `src/mcp_server/primers/` and serves them via its `get_surveycto_primer` tool. After updating any primer here — whether by regenerating from docs or by re-deriving from source — sync the change to the MCP server repo (manual until automated) so callers without the skill installed get the updated content.
+The [SurveyCTO MCP server](https://github.com/SurveyCTO/scto-assistant-be) vendors these primers under `src/mcp_server/primers/` and serves them via its `get_surveycto_primer` tool. After updating any primer here — whether by regenerating from docs or by re-deriving from source — sync the change to the MCP server repo (manual until automated) so callers without the skill installed get the updated content. As of this writing, the field-plug-in primer is not yet vendored by the MCP server; once it is, include it in the same sync process.
 
 ## Links
 
