@@ -103,7 +103,7 @@ Resource: `xlsform://{session_id}/{version}` — read with `resources/read` for 
    3. **Take a starting inventory from `form_summary` before patching or paging rows.** Explicitly note the existing starter rows and next append location; exact survey and choices column names already present; existing choice lists and stored values (especially reusable lists such as `yesno`); settings values (`form_id`, `form_title`, `default_language`, `version`); template metadata/calculation rows; and any `errors` or warnings. Do not assume column spellings or choice values from memory. Reuse existing columns/lists where appropriate, or intentionally change them before writing dependent expressions.
    4. `xls_get_rows` / `xls_get_row` to inspect the rows you intend to touch. Parallel calls are fine.
    5. `xls_apply_patches` — **batch all related edits into one call**. Use `validate_only=true` on the full batch before committing risky or large changes. For new forms, add survey rows and choices with `add_row`; update settings with `change_setting` rather than `edit_row`; do not edit the `.xlsx` with Python when MCP is available. For large batches, set `return_form_summary=false` and `include_details=false`, then call `get_xlsform_summary` only when you need a fresh summary.
-   6. `export_xlsform` → hand the resulting `download_url`/`curl_example` or resource link back to the user. The server handles XLSX preservation and formula recalculation. Avoid `format="base64"` for real workbooks.
+   6. `export_xlsform` → hand the resulting `download_url`/`curl_example` or resource link back to the user. The server handles XLSX preservation and formula recalculation. Avoid `format="base64"` for real workbooks. **If the form references any `custom-<name>` appearances, remind the user at this handoff to attach the matching `.fieldplugin.zip` files in the SurveyCTO console at upload time — this skill and the MCP server only edit local files and do not upload or attach plug-ins for the user.**
    7. Usually leave the session open until TTL expiry. Only call `end_xlsform_session` if the user explicitly wants server-side cleanup and no further downloads/follow-up edits are needed.
 
 #### Concurrency contract
@@ -318,6 +318,8 @@ After editing, verify:
 - [ ] Expressions use SurveyCTO conventions (`=` not `==`, `index()` not `position()`, etc.)
 - [ ] Labels, hints, notes, and messages use plain text or simple inline HTML fragments, not Markdown
 - [ ] `settings` has `form_title` and `form_id`
+- [ ] Every `custom-<name>` appearance in the form has a corresponding `<name>.fieldplugin.zip` that the user will attach to the form
+- [ ] When handing the form back to the user, **explicitly remind them to attach every required `.fieldplugin.zip` in the SurveyCTO console at upload time.** The skill and MCP server only edit local files; they do not upload or attach anything for the user
 
 ## Dataset XML definitions
 
@@ -356,6 +358,17 @@ The `summaries` worksheet defines visualizations. Each row is a summary with a `
 
 A field plug-in is a `.fieldplugin.zip` bundle (HTML/CSS/JS at the zip root) that takes over the rendering of a single form field. Plug-ins are supported only on `text`, `integer`, `decimal`, `select_one`, and `select_multiple` fields, and they run inside SurveyCTO Collect (Android), SurveyCTO Collect for iOS, and web forms.
 
+### When to use a field plug-in
+
+Default to native field types and appearances. Plug-ins add real cost — attachment management, version bumps, aggressive caching, and cross-platform (Android/iOS/web) testing — so reach for them only when a native field can't deliver the needed behavior or UX. Decide in this order:
+
+1. **Native fields and appearances first.** Most needs are met by built-in `type`/`appearance` combinations.
+2. **Use as-is from the [field plug-in catalog](https://support.surveycto.com/hc/en-us/articles/360045235134-Field-plug-in-catalog).** If a maintained catalog plug-in already does what's needed, attach it without authoring anything.
+3. **Customize an existing plug-in.** Download the closest catalog plug-in or SurveyCTO `baseline-*` repo as a ZIP from GitHub (`Code → Download ZIP`), or clone/fork it if the user is comfortable with Git, then edit the four files at the bundle root.
+4. **Start from the bundled template.** [`assets/field-plugin-template/`](assets/field-plugin-template/) is an intentionally minimal text-only skeleton — useful for an offline starting point or the smallest possible reading surface, but it omits several behaviors that `baseline-text` ships (see *What the bundled template omits* in [`references/field-plugins.md`](references/field-plugins.md)). Add those back manually if you need them.
+
+**Agent behavior rule:** when a form could benefit from a plug-in, present the trade-offs (added complexity vs. functionality/UX gained) and confirm with the user before adding any plug-in dependency. Unless the user has explicitly directed plug-in use, do not add `custom-<name>` appearances or attach `.fieldplugin.zip` files unilaterally.
+
 ### Use an existing plug-in in a form
 
 1. Attach the `.fieldplugin.zip` to the form (Form Designer → Attachments, or as a regular form attachment when uploading the XLSForm).
@@ -363,7 +376,10 @@ A field plug-in is a `.fieldplugin.zip` bundle (HTML/CSS/JS at the zip root) tha
 
 ### Authoring (when the user wants to build a plug-in)
 
-- Fork the closest **SurveyCTO baseline plug-in** for the field type (`baseline-text`, `baseline-integer`, `baseline-decimal`, `baseline-select_one`, `baseline-select_multiple`) or, for a clean text-only starting point, copy [`assets/field-plugin-template/`](assets/field-plugin-template/).
+Follow the decision order above. Concretely:
+
+- **Preferred starting point:** download the closest **SurveyCTO baseline plug-in** for the field type (`baseline-text`, `baseline-integer`, `baseline-decimal`, `baseline-select_one`, `baseline-select_multiple`) — or a closely related catalog plug-in — as a ZIP from GitHub's *Code → Download ZIP* button, then customize it. If the user prefers a Git workflow, cloning or forking works equally well; otherwise no Git tooling is required.
+- **Minimal/offline alternative:** copy [`assets/field-plugin-template/`](assets/field-plugin-template/). It is original code, not a copy of `baseline-text`, and intentionally leaves out several baseline behaviors (media rendering, HTML-entity unescaping in label/hint, standard `numbers`/`numbers_decimal`/`numbers_phone` appearance handling, soft-keyboard invocation, default `placeholder` fallback, read-only display of empty values). See `references/field-plugins.md` for the full list.
 - Edit the four files at the bundle root: `manifest.json`, `template.html`, `style.css`, `script.js`. Always use triple-brace Mustache for `{{{LABEL}}}` and `{{{HINT}}}` (they may contain HTML).
 - Re-package as `<name>.fieldplugin.zip` with all files at the zip root (subdirectories get flattened on upload). Bump `manifest.version` on every re-upload.
 
@@ -403,6 +419,8 @@ See [`references/xlsform.md`](references/xlsform.md) for `search()` syntax patte
 2. Outside the repeat: `rank-index(1, ${random_calc})` returns the index of the randomly-selected instance.
 
 ### Use a custom field plug-in
+
+Before adding a plug-in to a form, confirm with the user that the added complexity is worth the gained functionality, and remind them they will need to attach the `.fieldplugin.zip` themselves when uploading the form.
 
 Attach the `.fieldplugin.zip` to the form, then set `appearance` on the field to `custom-<filenamestem>` with any parameters the plug-in expects. The `<filenamestem>` is the part of the zip filename before `.fieldplugin.zip` (for example, `phonenumber.fieldplugin.zip` → `custom-phonenumber`). The `name` field inside `manifest.json` is a human-readable display name and does **not** drive the appearance.
 

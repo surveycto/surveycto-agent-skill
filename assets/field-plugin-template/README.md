@@ -1,9 +1,24 @@
 # Field plug-in template (text)
 
-A minimal SurveyCTO field plug-in skeleton for `text` fields. Use it as a
-clean starting point when none of the SurveyCTO baseline plug-ins
-(`baseline-text`, `baseline-integer`, etc.) is closer to what you want to
-build.
+A minimal SurveyCTO field plug-in skeleton for `text` fields. This is
+**original minimal code, not a copy of `baseline-text`**, and it
+intentionally omits several default behaviors that `baseline-text`
+demonstrates — see *What the bundled template omits* in
+[`references/field-plugins.md`](../../references/field-plugins.md) for the
+full list.
+
+This template is a **minimal/offline starter**, not the first
+recommendation. The recommended order for picking a starting point is:
+
+1. **The [field plug-in catalog](https://support.surveycto.com/hc/en-us/articles/360045235134-Field-plug-in-catalog).**
+   If a maintained catalog plug-in already does what you need, attach it
+   as-is and stop.
+2. **A catalog plug-in or SurveyCTO `baseline-*` repo, downloaded as a ZIP**
+   from GitHub's *Code → Download ZIP* button (or cloned/forked if you use
+   Git). This gives you working defaults to customize.
+3. **This template** — when you want the smallest possible reading surface,
+   are working offline, or none of the existing plug-ins is a closer fit
+   than starting fresh.
 
 ## What's here
 
@@ -14,7 +29,8 @@ build.
 | `style.css` | Stylesheet (loaded after any `externalCss`) |
 | `script.js` | Wires `<input>` to `setAnswer`, defines `clearAnswer` and `setFocus`, restores `CURRENT_ANSWER` on load |
 
-For non-`text` field types, fork the matching SurveyCTO baseline instead:
+For non-`text` field types, prefer downloading the matching SurveyCTO
+baseline (Git clone/fork also works):
 
 - `select_one`: https://github.com/surveycto/baseline-select_one
 - `select_multiple`: https://github.com/surveycto/baseline-select_multiple

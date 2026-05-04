@@ -16,7 +16,7 @@ The skill is fully usable on its own. Pair it with the **SurveyCTO MCP server** 
 | `references/data-explorer.md` | Data Explorer workbook definition reference |
 | `references/field-plugins.md` | Field plug-in authoring reference (manifest, form API, testing) |
 | `assets/xlsform-template.xlsx` | XLSForm template with headers, formatting, and help worksheets |
-| `assets/field-plugin-template/` | Minimal `text` field plug-in skeleton (manifest, template, css, js, README) |
+| `assets/field-plugin-template/` | Minimal/offline text-only field plug-in starter; not a substitute for the official `baseline-*` repos (manifest, template, css, js, README) |
 | `assets/field-plugin-test-harness/` | Zero-dependency local test tools: `validate.mjs` (static validator) and `preview.html` (single-file browser harness with stubbed host bridge) |
 
 The primers in `references/` are the canonical bundled knowledge set. The XLSForm/expressions/dataset/Data Explorer primers are also vendored by the [SurveyCTO MCP server](#surveycto-mcp-server) and served via its `get_surveycto_primer` tool, so callers without the skill installed can still retrieve them; the field-plug-in primer is not yet vendored on the server (see [Syncing primers to the MCP server](#syncing-primers-to-the-mcp-server)).

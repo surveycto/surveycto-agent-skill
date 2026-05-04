@@ -275,6 +275,8 @@ Defer exact syntax, operators, conversions, and examples to [`expressions.md`](e
 
 Canonical docs: [Using field plug-ins](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/06.using-field-plug-ins.html), [Testing field plug-ins](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/07.testing-field-plug-ins.html), and the Support Center [Guide to field plug-ins](https://support.surveycto.com/hc/en-us/articles/360045234534).
 
+**When to use one.** Default to native field types and appearances; plug-ins add attachment management, version bumping, caching, and cross-platform testing overhead. If a plug-in is warranted, check the [field plug-in catalog](https://support.surveycto.com/hc/en-us/articles/360045235134-Field-plug-in-catalog) first for one that meets the need as-is, then customize a catalog plug-in or matching SurveyCTO `baseline-*` repo, and only fall back to the bundled minimal template when starting completely fresh. See [`field-plugins.md`](field-plugins.md) for the decision order in detail.
+
 | Piece | Rule |
 | --- | --- |
 | Supported base types | `text`, `integer`, `decimal`, `select_one`, and `select_multiple`. |
@@ -282,6 +284,8 @@ Canonical docs: [Using field plug-ins](https://docs.surveycto.com/02-designing-f
 | Selection in spreadsheet | Put `custom-[plug-in name]` in `survey.appearance`, for example `custom-myplugin`. |
 | Parameters | Put parameters inside parentheses after the plug-in name, for example `custom-slider(min=0, max=10)`; parameter values can use expressions and field references. |
 | Behavior | A field plug-in completely takes over field appearance. Other appearance options may not be supported unless the plug-in documents them. Test carefully on target platforms. |
+
+**After editing.** Forms that reference a `custom-<name>` appearance require the user to attach the matching `<name>.fieldplugin.zip` in the SurveyCTO console at upload time. This skill and the MCP server only edit local files; they do not upload or attach plug-ins. Remind the user explicitly when handing back a form that references a plug-in.
 
 ## The Bundled XLSForm Template
 

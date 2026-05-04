@@ -431,8 +431,30 @@ log. This skill does not ship such a runner; it is a documented option.
 
 ## Recommended starting points
 
-Fork the SurveyCTO baseline plug-in for the field type closest to what you
-need:
+Most SurveyCTO users are not GitHub users — assume no `git` or `gh` CLI
+unless the user has clearly chosen a Git workflow. The default path for
+acquiring a starting point is downloading a repository as a ZIP from
+GitHub's *Code → Download ZIP* button.
+
+Decide in this order:
+
+1. **Use as-is from the catalog.** Always check the
+   [field plug-in catalog](https://support.surveycto.com/hc/en-us/articles/360045235134-Field-plug-in-catalog)
+   first — there's a good chance a maintained plug-in already does what
+   the user needs, and attaching it requires no authoring at all.
+2. **Customize an existing plug-in.** Download the closest catalog plug-in
+   or SurveyCTO `baseline-*` repo as a ZIP from GitHub (or clone/fork it if
+   the user is comfortable with Git), then edit the four files at the
+   bundle root.
+3. **Start from the bundled
+   [`assets/field-plugin-template/`](../assets/field-plugin-template/)** —
+   a clean minimal text-only skeleton, useful when offline or when the user
+   wants the smallest possible reading surface. It is original code, not a
+   copy of `baseline-text`, and intentionally omits several baseline
+   behaviors (see *What the bundled template omits* below). For non-`text`
+   field types, prefer a baseline.
+
+SurveyCTO baseline plug-ins, by field type:
 
 | Field type | Repo |
 | --- | --- |
@@ -448,20 +470,65 @@ Feature demos:
 - Metadata: https://github.com/surveycto/feature-demo-metadata
 - Intents (Android): https://github.com/surveycto/feature-demo-intents
 
-For a clean, minimal `text` starter that you can rename and extend in place,
-this skill ships [`assets/field-plugin-template/`](../assets/field-plugin-template/).
-For non-`text` field types, prefer the SurveyCTO baselines.
+### What the bundled template omits
 
-Always check the [field plug-in catalog](https://support.surveycto.com/hc/en-us/articles/360045235134-Field-plug-in-catalog)
-before building from scratch — there's a good chance a maintained plug-in
-already does what the user needs.
+`assets/field-plugin-template/` is intentionally minimal so the entire
+skeleton fits in a few dozen lines a reader can scan in one sitting. When
+you start from it instead of `baseline-text`, the following baseline-text
+behaviors must be added back manually if you need them. The list is
+pointer-style; consult `baseline-text`'s
+[`source/template.html`](https://github.com/surveycto/baseline-text/blob/master/source/template.html),
+[`source/style.css`](https://github.com/surveycto/baseline-text/blob/master/source/style.css),
+and [`source/script.js`](https://github.com/surveycto/baseline-text/blob/master/source/script.js)
+for the exact code rather than copying through this primer (license
+attribution belongs with the source).
+
+- **Field media rendering.** baseline-text's `template.html` renders
+  `MEDIAIMAGE`, `MEDIAAUDIO`, and `MEDIAVIDEO` blocks; the bundled template
+  does not.
+- **HTML-entity unescaping in label/hint.** baseline-text's `script.js`
+  defines an `unEntity()` helper and re-injects label/hint as
+  `innerHTML` so HTML coming from `${field}` references in the form
+  definition renders as markup rather than escaped text.
+- **`QUESTION_PLACEHOLDER_LABEL` with default fallback.** baseline-text's
+  template binds the placeholder to `QUESTION_PLACEHOLDER_LABEL` and falls
+  back to `"Your answer here..."` when none is set; the bundled template
+  has no placeholder.
+- **Read-only display of empty values.** baseline-text hides the input
+  entirely when the field is read-only and `CURRENT_ANSWER` is empty; the
+  bundled template renders a disabled empty input regardless.
+- **Read-only / response styling beyond `readOnly`.** baseline-text ships
+  CSS classes (`.label`, `.hint`, `.response`, `.is-read-only .response`)
+  with sensible defaults (margins, italic hint, bordered input, dimmed
+  read-only background); the bundled template's CSS is far thinner.
+- **Standard appearance handling.** baseline-text's `script.js` honors the
+  `numbers`, `numbers_decimal`, and `numbers_phone` standard appearances by
+  setting `input.type`/`pattern`/`inputmode` and applying an input filter
+  for decimal-only entry.
+- **Per-platform `inputmode` overrides.** baseline-text reads the
+  `inputmode-android`, `inputmode-ios`, and `inputmode-web` plug-in
+  parameters via `getPluginParameter()` and branches on the
+  `android-collect` / `ios-collect` / `web-collect` body classes.
+- **`setFocus` triggers the soft keyboard.** baseline-text's `setFocus()`
+  calls `window.showSoftKeyboard()` on Android in addition to focusing the
+  input; the bundled template only focuses the input.
+- **`dir="auto"` on label, hint, and input.** baseline-text sets
+  `dir="auto"` so RTL labels/answers render correctly; the bundled template
+  does not.
+
+baseline-text does **not** plumb `getMetaData`/`setMetaData` or call
+`goToNextField()` by default — those are demonstrated in the
+`feature-demo-metadata` and other feature-demo repos rather than
+baseline-text itself, so they are not gaps in the bundled template.
 
 ## Authoring workflow (condensed)
 
 1. **Check the catalog.** Don't rebuild what already exists.
-2. **Pick a baseline to fork.** Closest field type wins; feature demos cover specific capabilities.
+2. **Pick a starting point** in the order above — catalog plug-in or
+   `baseline-*` ZIP from GitHub (download or fork), or the bundled template
+   for a minimal/offline starter.
 3. **Write a short tech spec** before coding:
-   - Which baseline you're forking.
+   - Which baseline or catalog plug-in you're starting from (download or fork).
    - Default behaviors retained vs. removed.
    - Parameters: names, types, defaults, validation rules.
    - Output data shape (what `setAnswer` produces) and what metadata you persist with `setMetaData`.
