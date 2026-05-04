@@ -183,8 +183,14 @@ function validateZipFilename(zipPath, report) {
 }
 
 async function validateBundle(bundle, report) {
+  const nestedBasenames = new Set((bundle.allBasenames || []).filter(n => !bundle.files.includes(n)));
   for (const f of REQUIRED_FILES) {
-    if (!bundle.hasFile(f)) err(report, `Missing required file: ${f}`);
+    if (bundle.hasFile(f)) continue;
+    if (nestedBasenames.has(f)) {
+      err(report, `Required file '${f}' is nested in a subdirectory; it must be at the bundle root.`);
+    } else {
+      err(report, `Missing required file: ${f}`);
+    }
   }
   if (bundle.subdirs.length > 0) {
     warn(report, `Bundle contains subdirectories (${bundle.subdirs.join(', ')}). They will be flattened on upload — keep all files at the root.`);

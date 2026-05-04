@@ -4,8 +4,8 @@ A minimal SurveyCTO field plug-in skeleton for `text` fields. This is
 **original minimal code, not a copy of `baseline-text`**, and it
 intentionally omits several default behaviors that `baseline-text`
 demonstrates — see *What the bundled template omits* in
-[`references/field-plugins.md`](../../references/field-plugins.md) for the
-full list.
+`references/field-plugins.md` in the SurveyCTO Agent Skill
+(https://github.com/surveycto/surveycto-agent-skill) for the full list.
 
 This template is a **minimal/offline starter**, not the first
 recommendation. The recommended order for picking a starting point is:
@@ -55,7 +55,9 @@ forms.
    - Bump `version` on every re-upload (caches are aggressive).
    - Adjust `supportedFieldTypes` if you're targeting more than `text`.
 3. **Customize** `template.html`, `style.css`, and `script.js` for your field.
-4. **Iterate fast** with the harness in `../field-plugin-test-harness/`:
+4. **Iterate fast** with the field plug-in test harness shipped in the
+   SurveyCTO Agent Skill (`assets/field-plugin-test-harness/` — see
+   https://github.com/surveycto/surveycto-agent-skill):
    - Run `node validate.mjs ./myplugin` after each change.
    - Open `preview.html` to render the plug-in against editable fixtures.
 5. **Final validation** in SurveyCTO's in-product field plug-in console
@@ -105,6 +107,7 @@ forms.
 
 ## Reference
 
-See `references/field-plugins.md` in the SurveyCTO Agent Skill for the full
-manifest schema, form API, parameters/metadata model, runtime CSS classes,
-testing workflow, and common pitfalls.
+See `references/field-plugins.md` in the SurveyCTO Agent Skill
+(https://github.com/surveycto/surveycto-agent-skill) for the full manifest
+schema, form API, parameters/metadata model, runtime CSS classes, testing
+workflow, and common pitfalls.

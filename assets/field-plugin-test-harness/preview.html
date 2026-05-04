@@ -832,7 +832,7 @@ function setFocus()    { var i = document.getElementById('plugin-input'); if (i 
       // explicitly: read each name into an indexed slot, then materialize
       // the final array in order. Otherwise dependency chains (e.g. jQuery
       // plug-ins) can preview differently from SurveyCTO.
-      function readListInOrder(names, kind) {
+      function readListInOrder(names) {
         var present = names.filter(function (name) {
           if (!byName[name]) { missingExternals.push(name); return false; }
           return true;
@@ -858,8 +858,8 @@ function setFocus()    { var i = document.getElementById('plugin-input'); if (i 
       });
 
       Promise.all([
-        readListInOrder(extCssNames, 'css'),
-        readListInOrder(extJsNames,  'js'),
+        readListInOrder(extCssNames),
+        readListInOrder(extJsNames),
         Promise.all(attachmentReads),
       ]).then(function (parts) {
         state.extras.externalCss = parts[0];
@@ -1008,10 +1008,16 @@ function setFocus()    { var i = document.getElementById('plugin-input'); if (i 
     var bridge = bridgeScript();
     var jsonProps = JSON.stringify(opts.fieldProperties);
     var jsonManifest = JSON.stringify(opts.manifest);
+    // User-supplied CSS / JS is spliced into <style> / <script> tags below.
+    // A literal "</style>" or "</script>" anywhere in the source would close
+    // the wrapper tag prematurely. Neutralize them; the browser parses the
+    // backslash-escaped form as the same characters at runtime.
+    var safeCss = String(opts.css).replace(/<\/style/gi, '<\\/style');
+    var safeJs  = String(opts.js).replace(/<\/script/gi, '<\\/script');
     return [
       '<!doctype html>',
       '<html class="' + escAttr(opts.classes) + '">',
-      '<head><meta charset="utf-8"><style>' + opts.css + '</style></head>',
+      '<head><meta charset="utf-8"><style>' + safeCss + '</style></head>',
       '<body class="' + escAttr(opts.classes) + '">',
       opts.bodyHtml,
       '<script>(function(){',
@@ -1019,7 +1025,7 @@ function setFocus()    { var i = document.getElementById('plugin-input'); if (i 
       'window.__manifest = ' + jsonManifest + ';',
       bridge,
       '})();<\/script>',
-      '<script>\n' + opts.js + '\n//# sourceURL=plugin-script.js\n<\/script>',
+      '<script>\n' + safeJs + '\n//# sourceURL=plugin-script.js\n<\/script>',
       '<script>parent.postMessage({type:"ready"}, "*");<\/script>',
       '</body></html>'
     ].join('\n');
@@ -1098,6 +1104,10 @@ function setFocus()    { var i = document.getElementById('plugin-input'); if (i 
   // ---------- iframe message handling --------------------------------------
 
   function onIframeMessage(ev) {
+    // Only trust messages from our own preview iframe. If preview.html is
+    // ever embedded inside another page, sibling frames could otherwise post
+    // events that the harness would render as plug-in output.
+    if (ev.source !== iframe.contentWindow) return;
     var d = ev.data || {};
     if (!d || typeof d !== 'object') return;
     switch (d.type) {
@@ -1139,7 +1149,10 @@ function setFocus()    { var i = document.getElementById('plugin-input'); if (i 
   // ---------- Invoking plug-in functions from the parent -------------------
 
   function invoke(name) {
-    if (!iframe.contentWindow) { log('err', 'iframe is not ready.'); return; }
+    if (!iframe.contentWindow || !state.iframeReady) {
+      log('err', 'iframe is not ready.');
+      return;
+    }
     var args = [];
     if (name === 'handleRequiredMessage')   args = ['Please answer this question.'];
     if (name === 'handleConstraintMessage') args = ['Out of range.'];

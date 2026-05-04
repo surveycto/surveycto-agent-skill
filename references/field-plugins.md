@@ -212,7 +212,7 @@ The host adds classes to `<html>`/`<body>` so plug-ins can adapt their UI:
 | `ios-collect` | Running inside SurveyCTO Collect for iOS. |
 | `web-collect` | Running inside a SurveyCTO web form. |
 | `is-read-only` | Field is read-only (mirrors `fieldProperties.READONLY`). |
-| `language-<lang>` | Active form language. The host lowercases and replaces special characters/spaces with hyphens (e.g. `idioma español` → `language-idioma-espanol`). For single-language forms the class is `language-default`. |
+| `language-<lang>` | Active form language. The host lowercases the language name, strips diacritics to ASCII where possible (e.g. `español` → `espanol`), and replaces any remaining special characters or spaces with hyphens (e.g. `idioma español` → `language-idioma-espanol`). For single-language forms the class is `language-default`. |
 
 Utility classes (use them so plug-ins honor the user's font-size settings):
 

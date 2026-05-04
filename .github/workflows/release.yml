@@ -44,9 +44,11 @@ jobs:
           body: |
             SurveyCTO Agent Skill v${{ steps.version.outputs.version }}
 
-            Download `surveycto-skill.zip` and upload it to your agent platform:
-            - **Claude.ai / Cowork**: Settings > Features > Upload skill
-            - **Claude Code**: Extract to `~/.claude/skills/surveycto/`
-            - **Other tools**: Consult your tool's Agent Skills documentation
+            Download `surveycto-skill.zip` and install it in your agent platform:
+            - **Claude Cowork**: sidebar > Customize > Create skill… > Upload a skill
+            - **OpenAI Codex**: extract to `~/.agents/skills/surveycto/`
+            - **Other Agent Skills-compatible tools**: extract into the host's skills directory (often `~/.<host>/skills/surveycto/`); see the README for details
+
+            Pair the skill with the SurveyCTO MCP server at `https://assistant-be.surveycto.net/mcp` for purpose-built XLSForm tools and live knowledge-base search. Full per-host install steps are in the [README](https://github.com/surveycto/surveycto-agent-skill#installation).
           files: surveycto-skill.zip
           make_latest: true
