@@ -6,7 +6,7 @@ description: >
   lists, repeat groups, skip patterns, constraints, calculations, dataset
   publishing, case management, Data Explorer workbook definitions, and
   field plug-ins (.fieldplugin.zip bundles attached to fields via
-  "custom-<name>" appearances). Use when the user mentions SurveyCTO,
+  "custom-name" appearances). Use when the user mentions SurveyCTO,
   XLSForm, ODK-based forms, survey forms, or data collection forms, or
   when working with .xlsx files that contain survey/choices/settings
   worksheets, XML files with dataset root elements, Excel workbook
