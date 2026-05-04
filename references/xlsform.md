@@ -25,7 +25,7 @@ Columns are exact. Use spaces where documented, for example `constraint message`
 | --- | --- | --- | --- | --- |
 | `type` | Every row | Defines the row's field type or structural marker. | Use `text`, `integer`, `select_one yesno`, `begin group`, `begin repeat`, etc. Conditional formatting in the SurveyCTO template highlights recognized types. | [Introduction](https://docs.surveycto.com/02-designing-forms/01-core-concepts/01.intro.html), [field type pages](https://docs.surveycto.com/02-designing-forms/01-core-concepts/) |
 | `name` | Every field, group, repeat | Internal identifier; exported variable name for data fields. | Must be unique; use only letters, digits, underscores, and conservative ASCII names. End rows often repeat the name for readability, though only `type=end group` or `type=end repeat` is required. | [Introduction](https://docs.surveycto.com/02-designing-forms/01-core-concepts/01.intro.html), [groups](https://docs.surveycto.com/02-designing-forms/01-core-concepts/06.groups.html) |
-| `label` | Visible fields, groups, choices via `choices.label` | Primary prompt or display text. | Prefer concise plain text. Labels can include line breaks, simple inline HTML fragments, and `${field}` references to prior fields or groups. See [Label, Hint, And Message Formatting](#label-hint-and-message-formatting). Group references display group labels; repeat-group references display labels for all instances. | [Introduction](https://docs.surveycto.com/02-designing-forms/01-core-concepts/01.intro.html) |
+| `label` | Visible fields, groups, choices via `choices.label` | Primary prompt or display text. | Prefer concise plain text. SurveyCTO does not render Markdown; do not use `**bold**`, `# headings`, or Markdown list syntax expecting formatting. Labels can include line breaks, simple inline HTML fragments such as `<b>text</b>` or `<br>`, and `${field}` references to prior fields or groups. Group references display group labels; repeat-group references display labels for all instances. | [Introduction](https://docs.surveycto.com/02-designing-forms/01-core-concepts/01.intro.html) |
 | `label:Language` | Visible fields and groups | Translation of `label`. | Add one column per non-default language, such as `label:Spanish`. Keep the base `label` column for the default language. | [Form languages](https://docs.surveycto.com/02-designing-forms/02-additional-topics/07.translating.html) |
 | `hint` | Visible fields | Italic helper text below the label. | Use for enumerator guidance. SurveyCTO docs state hints do not support HTML formatting. | [Other field properties](https://docs.surveycto.com/02-designing-forms/01-core-concepts/05.other-columns.html) |
 | `hint:Language` | Visible fields | Translation of `hint`. | Add per-language variants such as `hint:Tamil`. | [Form languages](https://docs.surveycto.com/02-designing-forms/02-additional-topics/07.translating.html) |
@@ -275,6 +275,8 @@ Defer exact syntax, operators, conversions, and examples to [`expressions.md`](e
 
 Canonical docs: [Using field plug-ins](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/06.using-field-plug-ins.html), [Testing field plug-ins](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/07.testing-field-plug-ins.html), and the Support Center [Guide to field plug-ins](https://support.surveycto.com/hc/en-us/articles/360045234534).
 
+**When to use one.** Default to native field types and appearances; plug-ins add attachment management, version bumping, caching, and cross-platform testing overhead. If a plug-in is warranted, check the [field plug-in catalog](https://support.surveycto.com/hc/en-us/articles/360045235134-Field-plug-in-catalog) first for one that meets the need as-is, then customize a catalog plug-in or matching SurveyCTO `baseline-*` repo, and only fall back to the bundled minimal template when starting completely fresh. See [`field-plugins.md`](field-plugins.md) for the decision order in detail.
+
 | Piece | Rule |
 | --- | --- |
 | Supported base types | `text`, `integer`, `decimal`, `select_one`, and `select_multiple`. |
@@ -282,6 +284,8 @@ Canonical docs: [Using field plug-ins](https://docs.surveycto.com/02-designing-f
 | Selection in spreadsheet | Put `custom-[plug-in name]` in `survey.appearance`, for example `custom-myplugin`. |
 | Parameters | Put parameters inside parentheses after the plug-in name, for example `custom-slider(min=0, max=10)`; parameter values can use expressions and field references. |
 | Behavior | A field plug-in completely takes over field appearance. Other appearance options may not be supported unless the plug-in documents them. Test carefully on target platforms. |
+
+**After editing.** Forms that reference a `custom-<name>` appearance require the user to attach the matching `<name>.fieldplugin.zip` in the SurveyCTO console at upload time. This skill and the MCP server only edit local files; they do not upload or attach plug-ins. Remind the user explicitly when handing back a form that references a plug-in.
 
 ## The Bundled XLSForm Template
 
