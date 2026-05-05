@@ -1,0 +1,59 @@
+/*
+ * Minimal SurveyCTO field plug-in styles (text fields).
+ *
+ * To branch on platform, the runtime adds one of these classes to <html>:
+ *   .android-collect, .ios-collect, .web-collect
+ * Read-only fields get .is-read-only; the active language gets
+ * .language-<lang>, where <lang> is the form's language lowercased with
+ * special characters/spaces collapsed to hyphens. Single-language forms
+ * always use .language-default. Examples:
+ *   "English"          -> .language-english
+ *   "idioma español"   -> .language-idioma-espanol
+ *   (no languages)     -> .language-default
+ *
+ * Usage examples:
+ *   .android-collect .plugin-input { ... }
+ *   .is-read-only .plugin-input    { pointer-events: none; opacity: 0.6; }
+ *   .language-default .plugin-hint { font-style: italic; }
+ */
+
+.plugin-root {
+  display: block;
+  padding: 8px 0;
+  font-family: inherit;
+  color: inherit;
+}
+
+.plugin-label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.plugin-hint {
+  display: block;
+  margin: 0 0 8px 0;
+  opacity: 0.8;
+}
+
+.plugin-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: #fff;
+  color: inherit;
+}
+
+.plugin-input:focus {
+  outline: none;
+  border-color: #2c7be5;
+  box-shadow: 0 0 0 3px rgba(44, 123, 229, 0.2);
+}
+
+.is-read-only .plugin-input {
+  background: #f5f5f5;
+  cursor: not-allowed;
+}

@@ -18,7 +18,13 @@ jobs:
             -x '.gitignore' \
             -x 'README.md' \
             -x 'LICENSE' \
-            -x '*.zip'
+            -x '*.zip' \
+            -x '.DS_Store' \
+            -x 'Thumbs.db' \
+            -x '**/.DS_Store' \
+            -x '**/Thumbs.db' \
+            -x '.kilo/*' \
+            -x 'planning/*'
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

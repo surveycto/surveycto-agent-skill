@@ -11,3 +11,6 @@ surveycto-skill-dev.zip
 *~
 .vscode/
 .idea/
+
+# Kilo agent config
+.kilo/

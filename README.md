@@ -1,54 +1,110 @@
 # SurveyCTO Agent Skill
 
-An [Agent Skill](https://agentskills.io) that enables AI agents to design, edit, and debug [SurveyCTO](https://www.surveycto.com) forms (XLSForm .xlsx files), server datasets (XML definitions), and Data Explorer workbook definitions.
+An [Agent Skill](https://agentskills.io) that gives AI agents SurveyCTO domain expertise: designing, editing, and debugging [SurveyCTO](https://www.surveycto.com) forms (XLSForm `.xlsx` files), server datasets (XML definitions), Data Explorer workbook definitions, and field plug-ins (`.fieldplugin.zip` bundles).
+
+The skill is fully usable on its own. Pair it with the **SurveyCTO MCP server** for built-for-purpose XLSForm file operations and live knowledge-base search; without those tools the skill still imparts the expertise the agent needs, falling back to generic xlsx tooling, web fetches of the live docs, or conversational guidance.
 
 ## What's included
 
 | File | Purpose |
 | --- | --- |
-| `SKILL.md` | Main skill — overview, conventions, editing workflow, validation, debugging |
-| `references/xlsform-reference.md` | Complete XLSForm worksheet, column, and field type reference |
-| `references/expressions-reference.md` | All SurveyCTO expression operators and functions |
-| `references/dataset-xml-reference.md` | Dataset XML definition structure and usage |
-| `references/data-explorer-reference.md` | Data Explorer workbook definition reference |
+| `SKILL.md` | Main skill — file types, conventions, available tooling, editing workflow, validation, debugging |
+| `references/overview.md` | High-level orientation primer (read first) |
+| `references/xlsform.md` | Full XLSForm worksheet, column, and field-type reference |
+| `references/expressions.md` | SurveyCTO expression operators, functions, and conventions |
+| `references/datasets-xml.md` | Server dataset XML definition reference |
+| `references/data-explorer.md` | Data Explorer workbook definition reference |
+| `references/field-plugins.md` | Field plug-in authoring reference (manifest, form API, testing) |
 | `assets/xlsform-template.xlsx` | XLSForm template with headers, formatting, and help worksheets |
+| `assets/field-plugin-template/` | Minimal/offline text-only field plug-in starter; not a substitute for the official `baseline-*` repos (manifest, template, css, js, README) |
+| `assets/field-plugin-test-harness/` | Zero-dependency local test tools: `validate.mjs` (static validator) and `preview.html` (single-file browser harness with stubbed host bridge) |
+
+The primers in `references/` are the canonical bundled knowledge set. The XLSForm/expressions/dataset/Data Explorer primers are also vendored by the [SurveyCTO MCP server](#surveycto-mcp-server) and served via its `get_surveycto_primer` tool, so callers without the skill installed can still retrieve them; the field-plug-in primer is not yet vendored on the server (see [Syncing primers to the MCP server](#syncing-primers-to-the-mcp-server)).
+
+## SurveyCTO MCP server
+
+The skill recommends the **SurveyCTO MCP server** (public, no auth, Streamable HTTP) when it's available. It provides:
+
+- **XLSForm file tools** — `start_xlsform_session`, `get_xlsform_summary`, `xls_get_rows`, `xls_get_row`, `xls_apply_patches`, `export_xlsform`, `end_xlsform_session`. SurveyCTO-aware parsing, atomic patches with conflict detection, common column-alias normalization, formula recalculation on export, and formatting preservation. Explicit session cleanup is available but normal workflows can let sessions expire by TTL.
+- **Knowledge-base tools** — `kb_search` over indexed SurveyCTO docs/support content; `get_surveycto_primer` for these primers.
+- **Discovery** — `get_surveycto_mcp_capabilities` for the canonical tool list, recommended workflows, concurrency contract, and primer topic inventory.
+
+Endpoint: `https://assistant-be.surveycto.net/mcp`
+
+stdio-only clients can wrap with `mcp-remote`:
+
+```json
+{
+  "surveycto": {
+    "command": "npx",
+    "args": ["-y", "mcp-remote", "https://assistant-be.surveycto.net/mcp"]
+  }
+}
+```
+
+The full integration reference (tool surface, recommended workflow, concurrency contract, error codes, limits) lives in `SKILL.md` under *Tools you may have available → SurveyCTO MCP server*.
+
+## Download
+
+**Latest stable release (always up to date):**
+
+[**surveycto-skill.zip**](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip)
+
+This URL always points to the most recent release. You can also browse all releases on the [releases page](../../releases). The same zip is used for every host below. Pair it with the **SurveyCTO MCP server** at `https://assistant-be.surveycto.net/mcp` for the best experience — the per-host steps below cover both pieces.
 
 ## Installation
 
-### Claude.ai / Claude Cowork
+For the best experience, install **both** the skill and the SurveyCTO MCP server in your agent host. The skill works on its own, but the MCP server adds purpose-built XLSForm tools and live knowledge-base search.
 
-1. Download `surveycto-skill.zip` from the [latest release](../../releases/latest)
-2. Open **Settings** > **Features** (or the **Customize** page)
-3. Upload the zip file
+### Claude Cowork
 
-### Claude Code
+Claude Cowork has a UI for both pieces.
 
-Install as a plugin:
+1. Open the sidebar and click **Customize**.
+2. Click **Create skill… → Upload a skill** and upload [surveycto-skill.zip](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip).
+3. Click into **Connectors** and then **Add custom connector**.
+4. Enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
+5. Once the connector is added, click **Always allow** for each of the SurveyCTO tools.
 
-```bash
-# If this repo is registered as a plugin marketplace:
-/plugin install surveycto-agent-skill
+### OpenAI Codex
 
-# Or install directly from GitHub:
-/plugin install surveycto/surveycto-agent-skill
-```
-
-Or install manually as a personal skill:
+As of this writing, Codex doesn't have a UI for managing skills, so install the skill by unzipping it into `~/.agents/skills/surveycto`:
 
 ```bash
-git clone https://github.com/surveycto/surveycto-agent-skill.git
-cp -r surveycto-agent-skill ~/.claude/skills/surveycto
+mkdir -p ~/.agents/skills/surveycto
+unzip surveycto-skill.zip -d ~/.agents/skills/surveycto
 ```
+
+Codex *does* have a UI for MCP servers:
+
+1. Open Codex settings and click **MCP servers**.
+2. Click **+ Add server**, then enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
+3. If SurveyCTO capabilities don't appear in new chats, restart Codex.
+
+When Codex starts using SurveyCTO capabilities it will prompt for permission on every tool call. Select **Always allow** in those prompts to permanently approve each tool, so Codex gets less tiresome to use and can work more independently over time.
 
 ### Other Agent Skills-compatible tools
 
-This skill follows the [Agent Skills](https://agentskills.io) open standard. For tools like Cursor, VS Code Copilot, Gemini CLI, Roo Code, and others, consult their documentation for how to install agent skills. The skill directory can typically be placed in the tool's skills folder.
+This skill follows the [Agent Skills](https://agentskills.io) open standard. For tools like Claude Code, Cursor, VS Code Copilot, Gemini CLI, Roo Code, and others, consult the host's documentation for installing skills and MCP servers. In general:
+
+- **Skill**: extract `surveycto-skill.zip` into the host's skills directory (often `~/.<host>/skills/surveycto` or similar).
+- **MCP server**: register `https://assistant-be.surveycto.net/mcp` (Streamable HTTP, no auth). For stdio-only clients, wrap it with `mcp-remote`:
+
+  ```json
+  {
+    "surveycto": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://assistant-be.surveycto.net/mcp"]
+    }
+  }
+  ```
 
 ## Usage
 
 Once installed, the skill activates automatically when you:
+
 - Ask about SurveyCTO, XLSForm, or survey form design
-- Work with .xlsx files containing `survey`/`choices`/`settings` worksheets
+- Work with `.xlsx` files containing `survey`/`choices`/`settings` worksheets
 - Work with XML files containing `<dataset>` elements
 - Mention data collection forms, skip logic, constraints, or choice lists
 
@@ -56,13 +112,44 @@ Once installed, the skill activates automatically when you:
 
 This repo uses a `develop` → `main` branching model:
 
-- **`develop`** — active development; pushes here produce a `surveycto-skill-dev.zip` artifact
-- **`main`** — stable releases; pushes here produce a `surveycto-skill.zip` release artifact
+- **`develop`** — active development; pushes here produce a `surveycto-skill-dev.zip` build artifact
+- **`main`** — stable releases; pushes here create a GitHub Release with `surveycto-skill.zip` attached
+
+### Versioning
+
+The skill version is stored in the `metadata.version` field in `SKILL.md` frontmatter:
+
+```yaml
+metadata:
+  author: SurveyCTO
+  version: "1.0.0-beta"
+```
+
+When merging `develop` into `main`, bump this version number first. The release workflow reads it to create the Git tag and GitHub Release name (e.g., `"1.0.0-beta"` → tag `v1.0.0-beta`, release `v1.0.0-beta`).
+
+Use [semantic versioning](https://semver.org):
+
+- **Pre-release** (`1.0.0-beta`, `1.0.0-beta.2`, `1.0.0-rc.1`): Public beta and release-candidate builds before the first stable `1.0.0`
+- **Patch** (1.0.0 → 1.0.1): Fix incorrect information, typos, or clarify existing guidance
+- **Minor** (1.0.0 → 1.1.0): Add new content (new reference sections, new patterns, template updates)
+- **Major** (1.x → 2.0.0): Structural changes that may affect how agents use the skill
 
 ### Building the zip locally
 
 ```bash
-zip -r surveycto-skill.zip . -x '.*' -x 'README.md' -x '.github/*'
+zip -r surveycto-skill.zip . \
+  -x '.git/*' \
+  -x '.github/*' \
+  -x '.gitignore' \
+  -x 'README.md' \
+  -x 'LICENSE' \
+  -x '*.zip' \
+  -x '.DS_Store' \
+  -x 'Thumbs.db' \
+  -x '**/.DS_Store' \
+  -x '**/Thumbs.db' \
+  -x '.kilo/*' \
+  -x 'planning/*'
 ```
 
 ### Making changes
@@ -70,7 +157,320 @@ zip -r surveycto-skill.zip . -x '.*' -x 'README.md' -x '.github/*'
 1. Create a feature branch from `develop`
 2. Make your changes
 3. Open a PR to `develop`
-4. Once merged and tested, merge `develop` into `main` to create a release
+4. Once merged and tested, bump the version in `SKILL.md` and merge `develop` into `main` to create a release
+
+## Maintaining the primers
+
+The six primers in `references/` have two different maintenance models, depending on whether the public documentation actually covers the topic.
+
+### Docs-derived primers (regenerated periodically)
+
+`overview.md`, `xlsform.md`, `expressions.md`, and `field-plugins.md` cover material that is documented in public SurveyCTO sources. The first three are primarily derived from `docs.surveycto.com`; `field-plugins.md` is primarily derived from the SurveyCTO `field-plug-in-resources` GitHub developer docs, with product docs and support articles as secondary sources. They are intended to be refreshed periodically from a careful read of the live sources as the underlying product changes and as more capable AI agents become available. The prompts below are designed for a very capable AI agent with web-fetch and file-write capabilities — paste one into a fresh session, let it run, and replace the corresponding materials with the result. (The initial versions were built by ChatGPT Codex with GPT-5.5 High in VS Code.)
+
+**Order matters** for the core SurveyCTO primers. Generate them top-down so each lower-level primer can rely on the higher-level ones:
+
+1. `overview.md` (highest-level — generate first)
+2. `xlsform.md`
+3. `expressions.md`
+
+`field-plugins.md` can be refreshed independently after those are stable, but should cross-link to `xlsform.md` and `expressions.md` where it discusses `appearance`, parameters, and `plug-in-metadata()`.
+
+Each primer should be self-contained enough to be served standalone via the MCP `get_surveycto_primer` tool, but should cross-link to the others where helpful. Use Markdown, prefer tables for column/option/function reference content, and link back to canonical pages on `docs.surveycto.com`, `support.surveycto.com`, and the relevant SurveyCTO GitHub repositories so a reader can always go deeper.
+
+### Source-code-derived primers (bespoke, occasional)
+
+`datasets-xml.md` and `data-explorer.md` cover material that the public documentation does not adequately describe:
+
+- The Data Explorer docs page explicitly tells readers to "export a workbook and take a look, consulting the four help worksheets as needed" — there is no public column-by-column reference for summary types, options, or exclusion syntax.
+- The dataset XML support article is fairly thorough but is missing elements (e.g. `<dataLinkState>`) and contains at least one apparent inconsistency with how the format is actually used in the field.
+
+These primers were originally derived by inspecting the SurveyCTO server source code (and validating against real exported files), not by reading documentation. There is no Cowork prompt for regenerating them, because no agent reading public docs can produce something as accurate as what's already in the repo. When they need to change — because the underlying schema changes, or because a missing element comes to light — update them by re-deriving from the source code in a bespoke pass, then sync the result here.
+
+### Prompt 1 — `overview.md`
+
+```text
+You are writing the highest-level primer for an AI agent (and the humans
+reading the same content as a skill reference) on SurveyCTO. Target audience:
+a capable LLM agent that has just been told it needs to help a user with
+SurveyCTO, knows nothing specific about the product, and needs orientation
+before diving into details.
+
+Read the SurveyCTO documentation and produce a single Markdown file
+to save as `references/overview.md` in the surveycto-agent-skill repo.
+
+Primary sources to read carefully:
+- https://docs.surveycto.com/ (the docs home; survey the top-level table of contents)
+- https://docs.surveycto.com/02-designing-forms/01-core-concepts/ (forms intro)
+- https://docs.surveycto.com/05-exporting-and-publishing-data/04-advanced-publishing-with-datasets/01.datasets-intro.html (datasets intro)
+- https://docs.surveycto.com/04-monitoring-and-management/02-managing-for-quality/04.advanced-data-explorer.html (Data Explorer intro)
+- https://www.surveycto.com/ (high-level product positioning)
+
+The primer must cover, at a high level only:
+- What SurveyCTO is and what problem it solves.
+- Its relationship to XLSForm and ODK, and the most important ways SurveyCTO
+  has diverged from generic ODK behavior (list the highest-impact gotchas
+  briefly; full coverage belongs in expressions.md and xlsform.md).
+- The three definition file types an agent will encounter: XLSForm form
+  definitions (.xlsx with survey/choices/settings sheets), server dataset
+  definitions (.xml with <dataset> root), and Data Explorer workbook
+  definitions (.xlsx with summaries/settings/global_filters/global_exclusions
+  sheets). For each: what it is, how to recognize it, what it's for.
+- How forms and datasets relate: forms publish to datasets via dataLinks;
+  datasets pre-load into forms via formLinks; pulldata() and search() consume
+  pre-loaded data; case management is a special dataset configuration.
+- The authoritative sources hierarchy: docs.surveycto.com, then
+  support.surveycto.com, then www.surveycto.com.
+- A "where to go next" section pointing to the four lower-level primers
+  (xlsform.md, expressions.md, datasets-xml.md, data-explorer.md) with one
+  sentence each describing when to read it.
+
+Constraints:
+- This is a high-level primer. Do NOT include exhaustive column lists, field
+  type catalogs, expression function reference, or XML element reference —
+  those belong in the lower-level primers.
+- Keep it concise, but note that we are less concerned with token efficiency 
+  than with building effective and accurate expertise in the agent.
+- Open with an HTML comment block: `<!-- PRIMER: overview\n  STATUS: regenerated YYYY-MM-DD from docs.surveycto.com -->`.
+- Use Markdown headings starting at H1 ("# SurveyCTO Overview").
+- Use tables for the file-type recognition matrix.
+- Cross-link to the other primers using relative links: [`xlsform.md`](xlsform.md), etc.
+- Link back to canonical docs URLs whenever you assert a product fact.
+- Do NOT invent product behavior. If a source is ambiguous, say so or omit.
+
+Save as `references/overview.md`. Produce only the file contents.
+
+Before you conclude, double-check everything for accuracy. Mistakes in these
+primers can affect vital work done by SurveyCTO users.
+```
+
+### Prompt 2 — `xlsform.md`
+
+```text
+You are writing the XLSForm mechanics primer for the SurveyCTO agent skill.
+The reader has already read overview.md and knows what an XLSForm is at a high
+level. They now need to be able to read, edit, and reason about every part of
+a SurveyCTO XLSForm.
+
+Read the following SurveyCTO documentation thoroughly. Walk every subsection
+under "Designing forms: core concepts" and pull in any other pages linked
+from there that describe XLSForm structure or columns:
+
+Primary sources:
+- https://docs.surveycto.com/02-designing-forms/01-core-concepts/ (entire section)
+- https://docs.surveycto.com/02-designing-forms/01-core-concepts/01.design-tab.html
+- https://docs.surveycto.com/02-designing-forms/01-core-concepts/02.field-types.html
+- https://docs.surveycto.com/02-designing-forms/01-core-concepts/03.fields.html
+- https://docs.surveycto.com/02-designing-forms/01-core-concepts/04.choices.html
+- https://docs.surveycto.com/02-designing-forms/01-core-concepts/06.groups.html
+- https://docs.surveycto.com/02-designing-forms/01-core-concepts/07.constraints.html
+- https://docs.surveycto.com/02-designing-forms/01-core-concepts/08.relevance.html
+- https://docs.surveycto.com/02-designing-forms/01-core-concepts/10.appearances.html
+  (and any sibling pages on appearances, languages, settings)
+- Any pages describing the `settings` worksheet, encryption, languages, and
+  form-level metadata.
+- Pages describing pulldata(), search(), and field plug-ins as they relate to
+  XLSForm columns/appearances (link them to expressions.md for syntax detail).
+
+Also consult support.surveycto.com for any clarifications on edge cases.
+
+The primer must cover, comprehensively:
+- The three worksheets (`survey`, `choices`, `settings`) and their roles.
+- The `survey` worksheet: every standard column (type, name, label, hint,
+  relevance, constraint, constraint message, required, required message,
+  calculation, default, repeat_count, choice_filter, appearance, read only,
+  disabled, label/hint:Language variants, media columns, etc.) — what each
+  one does and how to use it. Use a table.
+- Label, hint, note, constraint-message, and required-message formatting:
+  SurveyCTO does not render Markdown in these strings. Tell agents to prefer
+  plain text; use simple inline HTML only when formatting is genuinely helpful;
+  never use full HTML documents; and note that hints should remain plain
+  because they are already client-styled helper text. Keep this aligned with
+  `references/xlsform.md#label-hint-and-message-formatting`.
+- All XLSForm field types SurveyCTO supports — text, integer, decimal,
+  select_one, select_multiple, date/time/datetime, geopoint/geotrace/geoshape,
+  image/audio/video/file, barcode, calculate, note, acknowledge, deviceid,
+  start/end/today, begin group / end group, begin repeat / end repeat,
+  username/email, and any SurveyCTO-specific types. Use a table.
+- The `choices` worksheet: list_name, value, label, label:Language, filter
+  columns, image/media columns, ordering rules.
+- Group and repeat semantics: nesting, scoping of relevance, repeat_count
+  and repeat_count expressions, fixed vs. dynamic repeats, references into
+  and out of repeats.
+- Choice filter and cascading select patterns.
+- Appearance options — list every appearance SurveyCTO documents, grouped by
+  the field type(s) they apply to (text, select_one, select_multiple, date,
+  group, repeat). Use tables.
+- The `settings` worksheet: form_title, form_id, version, default_language,
+  encryption keys (public_key), and any other documented settings.
+- Field plug-ins and search() / pulldata() at a structural level (where they
+  go, what columns they affect) — defer expression syntax to expressions.md
+  with a cross-link.
+- The XLSForm template that ships with the skill: what's in it, why it's the
+  required starting point, what would break if someone built a workbook from
+  scratch.
+
+Constraints:
+- Open with an HTML comment block: `<!-- PRIMER: xlsform\n  STATUS: regenerated YYYY-MM-DD from docs.surveycto.com -->`.
+- Use Markdown, lots of tables.
+- Cross-link to expressions.md for any expression-syntax details.
+- Cross-link to datasets-xml.md when discussing pulldata/search and dataset
+  attachment.
+- Length: as long as needed for completeness, but tight. Aim for accuracy
+  and structure over prose.
+- Link to the canonical docs page for every section.
+- If a column or field type is SurveyCTO-specific (not standard XLSForm),
+  call it out explicitly.
+
+Save as `references/xlsform.md`. Produce only the file contents.
+
+Before you conclude, double-check everything for accuracy. Mistakes in these
+primers can affect vital work done by SurveyCTO users.
+```
+
+### Prompt 3 — `expressions.md`
+
+```text
+You are writing the expression-language primer for the SurveyCTO agent skill.
+The reader knows what an XLSForm is and where expressions go (relevance,
+constraint, calculation, choice_filter, appearance, default). They now need
+to be able to read, write, and debug any SurveyCTO expression.
+
+Read the following SurveyCTO documentation thoroughly:
+
+Primary sources:
+- https://docs.surveycto.com/02-designing-forms/01-core-concepts/09.expressions.html (the canonical expressions page — read every section)
+- Any sibling/linked pages on operators, functions, dates, strings, repeats,
+  randomization, and references between fields.
+- https://support.surveycto.com — search for expression-related articles for
+  edge cases and worked examples.
+
+The primer must cover:
+- The expression model: XPath-derived, evaluated against the form instance,
+  what `${field}` and `.` resolve to in different columns (constraint,
+  calculation, relevance, choice_filter), and scoping inside groups/repeats.
+- All operators SurveyCTO supports — arithmetic (`+ - * div mod`), comparison
+  (`= != < > <= >=`), boolean (`and or not()`), string concatenation, and
+  any platform-specific operators. Note `=` (not `==`), `div` (not `/`).
+- Every documented function, grouped by category: math, string, date/time,
+  selection (selected, selected-at, count-selected), choice (choice-label,
+  jr:choice-name where it differs), repeat (index, count, sum, etc.),
+  randomization (random, once), pulldata, search, regex, conditional (if,
+  coalesce), node-set/aggregate (count, sum, min, max), and any others.
+  Use tables with: name, signature, return type, brief description, link to
+  the docs section that defines it, and a one-line example.
+- The SurveyCTO-vs-ODK divergence list, in full: at minimum `=` vs `==`,
+  `index()` vs `position()`, `choice-label()` vs `jr:choice-name()`,
+  `relevance` column vs `relevant`, `div` vs `/`, `selected()` requirement
+  for `select_multiple`, string-quoting rules, anything else the docs call
+  out.
+- String-literal quoting rules and escaping (single quotes preferred,
+  double quotes when the literal contains a single quote, no character
+  escaping inside single-quoted strings).
+- Common patterns with worked examples: skip logic, range constraints,
+  age from DOB, conditional values, pulldata lookups, search() for dynamic
+  lists, once() for stable randomization, treatment assignment, regex
+  validation, date comparisons (with date()), repeat-instance referencing.
+- Common pitfalls and how to recognize them.
+
+Constraints:
+- Open with an HTML comment block: `<!-- PRIMER: expressions\n  STATUS: regenerated YYYY-MM-DD from docs.surveycto.com -->`.
+- Length: as long as needed for completeness, but tight. Aim for accuracy
+  and structure over prose.
+- This primer is about *language*, not *placement*. If a function relates to
+  a specific XLSForm column or feature, link to xlsform.md or
+  datasets-xml.md rather than re-explaining it.
+- Use heavy tables for the function reference.
+- Link to the canonical docs anchor for every function/operator.
+- If SurveyCTO behavior diverges from generic ODK/XPath, call it out inline
+  AND in the divergence summary.
+- Do NOT invent functions. If you can't find docs for a function, omit it.
+
+Save as `references/expressions.md`. Produce only the file contents.
+
+Before you conclude, double-check everything for accuracy. Mistakes in these
+primers can affect vital work done by SurveyCTO users.
+```
+
+### Prompt 4 — Field plug-in materials
+
+```text
+You are refreshing the SurveyCTO agent skill's field plug-in authoring
+materials. The goal is to keep the bundled reference and scaffolding aligned
+with the current SurveyCTO field plug-in developer documentation, without
+regressing the skill's offline usefulness for IDE-based coding agents.
+
+Work in the `surveycto-agent-skill` repo. Read the current files first:
+- `references/field-plugins.md`
+- `SKILL.md` sections that mention field plug-ins
+- `assets/field-plugin-template/`
+- `assets/field-plugin-test-harness/README.md`
+- `assets/field-plugin-test-harness/validate.mjs`
+- `assets/field-plugin-test-harness/preview.html`
+
+Then read the live authoritative sources carefully:
+- https://github.com/surveycto/field-plug-in-resources/blob/master/docs/developer-docs-home.md
+- https://github.com/surveycto/field-plug-in-resources/blob/master/docs/plug-in-definition.md
+- https://github.com/surveycto/field-plug-in-resources/blob/master/docs/api-reference.md
+- https://docs.surveycto.com/02-designing-forms/03-advanced-topics/06.using-field-plug-ins.html
+- https://docs.surveycto.com/02-designing-forms/03-advanced-topics/07.testing-field-plug-ins.html
+- https://support.surveycto.com/hc/en-us/articles/360045235134-Field-plug-in-catalog
+- https://support.surveycto.com/hc/en-us/articles/360052426933-Guide-to-creating-field-plug-ins
+- https://support.surveycto.com/hc/en-us/articles/360045234534-Guide-to-field-plug-ins-how-to-customize-fields
+- https://www.surveycto.com/data-collection-quality/build-field-plugins-genai/
+
+Also inspect the current SurveyCTO baseline and feature-demo repositories for
+changes in conventions, examples, or packaging assumptions:
+- https://github.com/surveycto/baseline-text
+- https://github.com/surveycto/baseline-integer
+- https://github.com/surveycto/baseline-decimal
+- https://github.com/surveycto/baseline-select_one
+- https://github.com/surveycto/baseline-select_multiple
+- https://github.com/surveycto/feature-demo-parameters
+- https://github.com/surveycto/feature-demo-metadata
+- https://github.com/surveycto/feature-demo-intents
+
+Update only what the sources justify. Preserve concise, agent-usable guidance;
+do not expand into a verbatim copy of the upstream docs. In particular:
+- Refresh `references/field-plugins.md` so it accurately covers the current
+  bundle anatomy, manifest schema, supported field types, packaging rules,
+  Mustache/template behavior, form API, runtime CSS classes, provided and
+  called JavaScript functions, parameter and metadata behavior, using a
+  plug-in in an XLSForm, testing workflow, recommended baselines, sharing
+  conventions, and common pitfalls.
+- Keep the primer self-contained for offline agent use, but include canonical
+  links back to the GitHub developer docs, product docs, and support articles.
+- Open the primer with an HTML comment block like:
+  `<!-- PRIMER: field-plugins\n  STATUS: refreshed YYYY-MM-DD from field-plug-in-resources and SurveyCTO docs -->`.
+- Check whether `SKILL.md` still gives the right minimal routing and workflow
+  guidance for field plug-ins. Keep `SKILL.md` brief; defer detailed API
+  content to `references/field-plugins.md`.
+- Check whether `assets/field-plugin-template/` still matches current baseline
+  conventions. Update the template only when the upstream docs or baselines
+  show a concrete change. Keep it minimal and generic.
+- Check whether `assets/field-plugin-test-harness/validate.mjs` and
+  `preview.html` still validate and simulate the current documented runtime
+  behavior. Update them only for concrete doc/API changes or clear bugs. Do
+  not add npm dependencies; the harness should remain zero-dependency and
+  usable offline.
+- Keep all edited files ASCII unless an existing file or upstream API name
+  requires otherwise.
+
+Validation:
+- Run the field plug-in harness validator against `assets/field-plugin-template/`.
+- If the repo has tests or lint/build scripts relevant to the changed files,
+  run them.
+- Manually check that every field plug-in source link in
+  `references/field-plugins.md` still resolves.
+- Summarize which upstream changes were incorporated and which files changed.
+
+Before you conclude, double-check everything for accuracy. Mistakes in these
+materials can affect production SurveyCTO forms and user-facing data collection
+workflows.
+```
+
+### Syncing primers to the MCP server
+
+The [SurveyCTO MCP server](https://github.com/SurveyCTO/scto-assistant-be) vendors these primers under `src/mcp_server/primers/` and serves them via its `get_surveycto_primer` tool. After updating any primer here — whether by regenerating from docs or by re-deriving from source — sync the change to the MCP server repo (manual until automated) so callers without the skill installed get the updated content. As of this writing, the field-plug-in primer is not yet vendored by the MCP server; once it is, include it in the same sync process.
 
 ## Links
 
