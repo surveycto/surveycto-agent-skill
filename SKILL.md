@@ -16,7 +16,7 @@ description: >
 license: Apache-2.0
 metadata:
   author: SurveyCTO
-  version: "1.0.0-beta"
+  version: "1.0.0-beta.2"
 ---
 
 # SurveyCTO Form and Dataset Authoring
