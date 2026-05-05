@@ -15,11 +15,15 @@ The skill is fully usable on its own. Pair it with the **SurveyCTO MCP server** 
 | `references/datasets-xml.md` | Server dataset XML definition reference |
 | `references/data-explorer.md` | Data Explorer workbook definition reference |
 | `references/field-plugins.md` | Field plug-in authoring reference (manifest, form API, testing) |
+| `references/mcp.md` | SurveyCTO MCP server reference (tool surface, `xls_apply_patches` semantics, concurrency, errors, limits) |
 | `assets/xlsform-template.xlsx` | XLSForm template with headers, formatting, and help worksheets |
 | `assets/field-plugin-template/` | Minimal/offline text-only field plug-in starter; not a substitute for the official `baseline-*` repos (manifest, template, css, js, README) |
 | `assets/field-plugin-test-harness/` | Zero-dependency local test tools: `validate.mjs` (static validator) and `preview.html` (single-file browser harness with stubbed host bridge) |
 
-The primers in `references/` are the canonical bundled knowledge set. The XLSForm/expressions/dataset/Data Explorer primers are also vendored by the [SurveyCTO MCP server](#surveycto-mcp-server) and served via its `get_surveycto_primer` tool, so callers without the skill installed can still retrieve them; the field-plug-in primer is not yet vendored on the server (see [Syncing primers to the MCP server](#syncing-primers-to-the-mcp-server)).
+The files in `references/` split into two categories:
+
+- **Primers** (`overview.md`, `xlsform.md`, `expressions.md`, `datasets-xml.md`, `data-explorer.md`, `field-plugins.md`) are the canonical bundled SurveyCTO knowledge set. The XLSForm, expressions, dataset, and Data Explorer primers are also vendored by the [SurveyCTO MCP server](#surveycto-mcp-server) and served via its `get_surveycto_primer` tool, so callers without the skill installed can still retrieve them; the field-plug-in primer is not yet vendored on the server (see [Syncing primers to the MCP server](#syncing-primers-to-the-mcp-server)).
+- **MCP server reference** (`mcp.md`) documents the SurveyCTO MCP server itself — its tool surface, patch semantics, concurrency contract, error codes, and limits. It is required reading for the agent before any MCP tool call. It is not vendored back to the MCP server (it would be circular) and is maintained separately (see [Maintaining the MCP server reference](#maintaining-the-mcp-server-reference)).
 
 ## SurveyCTO MCP server
 
@@ -42,7 +46,7 @@ stdio-only clients can wrap with `mcp-remote`:
 }
 ```
 
-The full integration reference (tool surface, recommended workflow, concurrency contract, error codes, limits) lives in `SKILL.md` under *Tools you may have available → SurveyCTO MCP server*.
+The full integration reference — tool surface, `xls_apply_patches` semantics, concurrency contract, error codes, and limits — lives in [`references/mcp.md`](references/mcp.md). `SKILL.md` keeps only the workflow that uses these tools.
 
 ## Download
 
@@ -159,9 +163,9 @@ zip -r surveycto-skill.zip . \
 3. Open a PR to `develop`
 4. Once merged and tested, bump the version in `SKILL.md` and merge `develop` into `main` to create a release
 
-## Maintaining the primers
+## Maintaining `references/`
 
-The six primers in `references/` have two different maintenance models, depending on whether the public documentation actually covers the topic.
+`references/` contains six primers (maintained as described below) plus the MCP server reference `mcp.md` (maintained from a separate source — see [Maintaining the MCP server reference](#maintaining-the-mcp-server-reference)). The primers themselves split into two maintenance models depending on whether the public documentation actually covers the topic.
 
 ### Docs-derived primers (regenerated periodically)
 
@@ -467,6 +471,23 @@ Before you conclude, double-check everything for accuracy. Mistakes in these
 materials can affect production SurveyCTO forms and user-facing data collection
 workflows.
 ```
+
+### Maintaining the MCP server reference
+
+`references/mcp.md` documents the SurveyCTO MCP server's tool surface, patch semantics, concurrency contract, error envelope, and limits. Unlike the primers, it is not derived from public SurveyCTO documentation — it is derived from the MCP server's own implementation in the private [`scto-assistant-be`](https://github.com/SurveyCTO/scto-assistant-be) repo. The canonical sources are the tool definitions, capability discovery payload, and error-handling code in that repo.
+
+Update `mcp.md` whenever the server's tool surface changes:
+
+- Tools added, removed, or renamed
+- Tool signatures (parameter names, defaults, caps) changed
+- Patch op support changed (new ops, new column aliases, new validation behavior)
+- Error codes added, removed, or repurposed
+- Limits changed (upload size, session TTL, page size, `top_k` cap)
+- Concurrency rules changed
+
+There is no AI-agent prompt for regenerating this file because no agent reading public sources can produce it accurately — the truth lives in `scto-assistant-be`. When the server changes, update `mcp.md` by hand from the relevant source files in that repo, then bump the skill version per the rules in [Versioning](#versioning) (typically a minor bump for additive changes, major for breaking changes since the agent's MCP workflow depends on this content).
+
+This file is **not** vendored back to the MCP server via `get_surveycto_primer` — it would be circular, and the server already exposes its current tool surface live via `get_surveycto_mcp_capabilities`.
 
 ### Syncing primers to the MCP server
 
