@@ -63,7 +63,7 @@ Before using any SurveyCTO MCP tool, read [`references/mcp.md`](references/mcp.m
 
 #### Recommended workflow
 
-1. **Before any MCP tool call**: read [`references/mcp.md`](references/mcp.md), then call `get_surveycto_mcp_capabilities` when unsure to learn the current tool list and primer topics.
+1. **Before any MCP tool call**: read [`references/mcp.md`](references/mcp.md), then call `get_surveycto_mcp_capabilities` when unsure to learn the current tool list and primer topics. If the work involves XLSForms, you must also have read [`references/xlsform.md`](references/xlsform.md) first — see [Prerequisite: read the XLSForm reference](#prerequisite-read-the-xlsform-reference).
 2. **Factual SurveyCTO questions**: `kb_search` → quote the returned URLs in your answer.
 3. **Create a new XLSForm**: follow the [Workflow: create a new form](#workflow-create-a-new-form) below — it is the canonical sequence and enforces the template-first rule.
 4. **Inspect or edit an existing XLSForm**:
@@ -187,6 +187,12 @@ Exception: when the string contains single quotes, use double quotes:
 
 This section applies regardless of which file-tooling path you're using (SurveyCTO MCP server, generic xlsx tool, or describing edits in prose for the user to apply). The rules are the same; only the mechanism differs. When MCP tools are connected, use this section to plan and validate edits, but apply the edits through `xls_apply_patches` and export through `export_xlsform`.
 
+### Prerequisite: read the XLSForm reference
+
+**Before any XLSForm work — creating, editing, debugging, *or answering questions about an XLSForm* — read [`references/xlsform.md`](references/xlsform.md).** This is mandatory regardless of which tooling path you use (MCP, generic xlsx tooling, or prose-only) and regardless of how simple the task seems. It documents SurveyCTO-specific column conventions, multi-language structure, group/repeat rules, and expression syntax that diverge from general ODK knowledge — do not rely on general ODK memory, even for "obvious" things. If anything remains unclear after reading the reference, use `kb_search` (or live docs at `docs.surveycto.com`) before proceeding.
+
+One known-recurring gotcha worth flagging up front, because general ODK memory consistently gets it wrong: in multi-language forms, the **default language goes in the unsuffixed column** (`label`, `hint`, `constraint message`, …) and additional languages go in suffixed columns (e.g., `label:Spanish`). Putting the default language in a suffixed column and leaving the base empty silently breaks the form. Other divergences are documented in [`references/xlsform.md`](references/xlsform.md); read it.
+
 ### CRITICAL: Always start from the template
 
 Every new XLSForm **must** start from the bundled template at [`assets/xlsform-template.xlsx`](assets/xlsform-template.xlsx).
@@ -218,10 +224,11 @@ These produce a technically valid but unusable form: no conditional formatting, 
 Follow these steps in order:
 
 1. Make a literal file copy from `assets/xlsform-template.xlsx` to the output path. Do not create a new workbook object, generate worksheets, or convert from another source.
-2. If MCP tools are available, read [`references/mcp.md`](references/mcp.md), then upload the copied file via `start_xlsform_session`. If MCP is unavailable, open the copied workbook directly with the best available spreadsheet/XLSX tooling.
-3. Read the starting structure fully before editing. With MCP, use the returned `form_summary`; without MCP, inspect the workbook sheets directly. Note next append location, exact column names already present, existing reusable choice lists, and current settings values.
-4. Apply related edits in one batch. With MCP, use a single `xls_apply_patches` call and `change_setting` for `form_id`, `form_title`, and `default_language`; without MCP, write directly into the copied workbook's existing worksheets.
-5. Export or save the result. With MCP, use `export_xlsform` and hand the `download_url` to the user. Remind the user to attach any required `.fieldplugin.zip` files in the SurveyCTO console at upload time.
+2. **Read [`references/xlsform.md`](references/xlsform.md) before designing any form content.** This is mandatory — not a lookup to do if confused later. Column conventions, multi-language structure, group/repeat rules, and expression syntax all have SurveyCTO-specific details that differ from general ODK knowledge. See [Prerequisite: read the XLSForm reference](#prerequisite-read-the-xlsform-reference).
+3. If MCP tools are available, read [`references/mcp.md`](references/mcp.md), then upload the copied file via `start_xlsform_session`. If MCP is unavailable, open the copied workbook directly with the best available spreadsheet/XLSX tooling.
+4. Read the starting structure fully before editing. With MCP, use the returned `form_summary`; without MCP, inspect the workbook sheets directly. Note next append location, exact column names already present, existing reusable choice lists, and current settings values.
+5. Apply related edits in one batch. With MCP, use a single `xls_apply_patches` call and `change_setting` for `form_id`, `form_title`, and `default_language`; without MCP, write directly into the copied workbook's existing worksheets.
+6. Export or save the result. With MCP, use `export_xlsform` and hand the `download_url` to the user. Remind the user to attach any required `.fieldplugin.zip` files in the SurveyCTO console at upload time.
 
 **Why the template is mandatory:** It contains conditional formatting rules, help worksheets, column headers, starter metadata fields, formula-based versioning, and pre-formatted rows that cannot be reliably recreated programmatically. Skipping the template produces files that are technically valid but painful for humans to edit in Excel.
 
@@ -244,15 +251,16 @@ The template provides:
 ### Editing workflow
 
 1. **Start from the right base** — copy the template (new forms) or load the existing workbook.
-2. **Read the existing structure** so you know what's there.
+2. **Read [`references/xlsform.md`](references/xlsform.md) before writing any patches.** This applies to edits of existing forms just as much as new ones. Do not rely on general ODK memory for column names, expression syntax, or multi-language conventions. See [Prerequisite: read the XLSForm reference](#prerequisite-read-the-xlsform-reference).
+3. **Read the existing structure** so you know what's there.
    - With MCP available: upload first with `start_xlsform_session`, then use the returned `form_summary` as the starting overview. Call `xls_get_rows` only when you need more detail than the summary provides.
    - Without MCP: open and read all three sheets.
-3. **Plan the edits** — identify the rows to add/modify and the cell values.
-4. **Apply** — write cell values into the appropriate rows and columns.
+4. **Plan the edits** — identify the rows to add/modify and the cell values.
+5. **Apply** — write cell values into the appropriate rows and columns.
    - With MCP available: `xls_apply_patches`.
    - Without MCP: write cells directly.
-5. **Validate** against the checklist below.
-6. **Save / export** — with MCP available, `export_xlsform` runs formula recalculation and returns the file; without MCP, save the workbook and use the best available recalculation path.
+6. **Validate** against the checklist below.
+7. **Save / export** — with MCP available, `export_xlsform` runs formula recalculation and returns the file; without MCP, save the workbook and use the best available recalculation path.
 
 ### Common operations
 
@@ -423,7 +431,7 @@ In the dataset XML, add a `<dataLink>` with:
 | Primer | When to read |
 | --- | --- |
 | [`references/overview.md`](references/overview.md) | First — orientation, file types, how they fit together |
-| [`references/xlsform.md`](references/xlsform.md) | Editing or debugging an XLSForm — full mechanics |
+| [`references/xlsform.md`](references/xlsform.md) | **Mandatory before any XLSForm work** — column conventions, expressions, groups/repeats, multi-language |
 | [`references/expressions.md`](references/expressions.md) | Any expression work (relevance, constraint, calculation, choice_filter) |
 | [`references/datasets-xml.md`](references/datasets-xml.md) | Server dataset XML definitions |
 | [`references/data-explorer.md`](references/data-explorer.md) | Data Explorer dashboards |

@@ -2,47 +2,7 @@
 
 An [Agent Skill](https://agentskills.io) that gives AI agents SurveyCTO domain expertise: designing, editing, and debugging [SurveyCTO](https://www.surveycto.com) forms (XLSForm `.xlsx` files), server datasets (XML definitions), Data Explorer workbook definitions, and field plug-ins (`.fieldplugin.zip` bundles).
 
-The skill is fully usable on its own. Pair it with the **SurveyCTO MCP server** for built-for-purpose XLSForm file operations and live knowledge-base search; without those tools the skill still imparts the expertise the agent needs, falling back to generic xlsx tooling, web fetches of the live docs, or conversational guidance.
-
-## What's included
-
-| File | Purpose |
-| --- | --- |
-| `SKILL.md` | Main skill — file types, conventions, available tooling, editing workflow, validation, debugging |
-| `references/overview.md` | High-level orientation primer (read first) |
-| `references/xlsform.md` | Full XLSForm worksheet, column, and field-type reference |
-| `references/expressions.md` | SurveyCTO expression operators, functions, and conventions |
-| `references/datasets-xml.md` | Server dataset XML definition reference |
-| `references/data-explorer.md` | Data Explorer workbook definition reference |
-| `references/field-plugins.md` | Field plug-in authoring reference (manifest, form API, testing) |
-| `assets/xlsform-template.xlsx` | XLSForm template with headers, formatting, and help worksheets |
-| `assets/field-plugin-template/` | Minimal/offline text-only field plug-in starter; not a substitute for the official `baseline-*` repos (manifest, template, css, js, README) |
-| `assets/field-plugin-test-harness/` | Zero-dependency local test tools: `validate.mjs` (static validator) and `preview.html` (single-file browser harness with stubbed host bridge) |
-
-The primers in `references/` are the canonical bundled knowledge set. The XLSForm/expressions/dataset/Data Explorer primers are also vendored by the [SurveyCTO MCP server](#surveycto-mcp-server) and served via its `get_surveycto_primer` tool, so callers without the skill installed can still retrieve them; the field-plug-in primer is not yet vendored on the server (see [Syncing primers to the MCP server](#syncing-primers-to-the-mcp-server)).
-
-## SurveyCTO MCP server
-
-The skill recommends the **SurveyCTO MCP server** (public, no auth, Streamable HTTP) when it's available. It provides:
-
-- **XLSForm file tools** — `start_xlsform_session`, `get_xlsform_summary`, `xls_get_rows`, `xls_get_row`, `xls_apply_patches`, `export_xlsform`, `end_xlsform_session`. SurveyCTO-aware parsing, atomic patches with conflict detection, common column-alias normalization, formula recalculation on export, and formatting preservation. Explicit session cleanup is available but normal workflows can let sessions expire by TTL.
-- **Knowledge-base tools** — `kb_search` over indexed SurveyCTO docs/support content; `get_surveycto_primer` for these primers.
-- **Discovery** — `get_surveycto_mcp_capabilities` for the canonical tool list, recommended workflows, concurrency contract, and primer topic inventory.
-
-Endpoint: `https://assistant-be.surveycto.net/mcp`
-
-stdio-only clients can wrap with `mcp-remote`:
-
-```json
-{
-  "surveycto": {
-    "command": "npx",
-    "args": ["-y", "mcp-remote", "https://assistant-be.surveycto.net/mcp"]
-  }
-}
-```
-
-The full integration reference (tool surface, recommended workflow, concurrency contract, error codes, limits) lives in `SKILL.md` under *Tools you may have available → SurveyCTO MCP server*.
+This skill is most useful within a desktop AI agent like Claude Cowork or OpenAI Codex (as opposed to a cloud-based AI chatbot). It is also best paired with the **SurveyCTO MCP server** for built-for-purpose XLSForm file operations and live knowledge-base search; without those tools the skill still imparts the expertise the agent needs, falling back to generic xlsx tooling, web fetches of the live docs, or conversational guidance.
 
 ## Download
 
@@ -65,6 +25,8 @@ Claude Cowork has a UI for both pieces.
 3. Click into **Connectors** and then **Add custom connector**.
 4. Enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
 5. Once the connector is added, click **Always allow** for each of the SurveyCTO tools.
+
+Tip: go into your Claude billing settings and enable extra usage so that your agent can continue working even after you've hit your subscription-level usage quota.
 
 ### OpenAI Codex
 
@@ -107,6 +69,51 @@ Once installed, the skill activates automatically when you:
 - Work with `.xlsx` files containing `survey`/`choices`/`settings` worksheets
 - Work with XML files containing `<dataset>` elements
 - Mention data collection forms, skip logic, constraints, or choice lists
+- Ask about field plug-ins
+
+## What's included
+
+| File | Purpose |
+| --- | --- |
+| `SKILL.md` | Main skill — file types, conventions, available tooling, editing workflow, validation, debugging |
+| `references/overview.md` | High-level orientation primer (read first) |
+| `references/xlsform.md` | Full XLSForm worksheet, column, and field-type reference |
+| `references/expressions.md` | SurveyCTO expression operators, functions, and conventions |
+| `references/datasets-xml.md` | Server dataset XML definition reference |
+| `references/data-explorer.md` | Data Explorer workbook definition reference |
+| `references/field-plugins.md` | Field plug-in authoring reference (manifest, form API, testing) |
+| `references/mcp.md` | SurveyCTO MCP server reference (tool surface, `xls_apply_patches` semantics, concurrency, errors, limits) |
+| `assets/xlsform-template.xlsx` | XLSForm template with headers, formatting, and help worksheets |
+| `assets/field-plugin-template/` | Minimal/offline text-only field plug-in starter; not a substitute for the official `baseline-*` repos (manifest, template, css, js, README) |
+| `assets/field-plugin-test-harness/` | Zero-dependency local test tools: `validate.mjs` (static validator) and `preview.html` (single-file browser harness with stubbed host bridge) |
+
+The files in `references/` split into two categories:
+
+- **Primers** (`overview.md`, `xlsform.md`, `expressions.md`, `datasets-xml.md`, `data-explorer.md`, `field-plugins.md`) are the canonical bundled SurveyCTO knowledge set. The XLSForm, expressions, dataset, and Data Explorer primers are also vendored by the [SurveyCTO MCP server](#surveycto-mcp-server) and served via its `get_surveycto_primer` tool, so callers without the skill installed can still retrieve them; the field-plug-in primer is not yet vendored on the server (see [Syncing primers to the MCP server](#syncing-primers-to-the-mcp-server)).
+- **MCP server reference** (`mcp.md`) documents the SurveyCTO MCP server itself — its tool surface, patch semantics, concurrency contract, error codes, and limits. It is required reading for the agent before any MCP tool call. It is not vendored back to the MCP server (it would be circular) and is maintained separately (see [Maintaining the MCP server reference](#maintaining-the-mcp-server-reference)).
+
+## SurveyCTO MCP server
+
+The skill recommends the **SurveyCTO MCP server** (public, no auth, Streamable HTTP) when it's available. It provides:
+
+- **XLSForm file tools** — `start_xlsform_session`, `get_xlsform_summary`, `xls_get_rows`, `xls_get_row`, `xls_apply_patches`, `export_xlsform`, `end_xlsform_session`. SurveyCTO-aware parsing, atomic patches with conflict detection, common column-alias normalization, formula recalculation on export, and formatting preservation. Explicit session cleanup is available but normal workflows can let sessions expire by TTL.
+- **Knowledge-base tools** — `kb_search` over indexed SurveyCTO docs/support content; `get_surveycto_primer` for these primers.
+- **Discovery** — `get_surveycto_mcp_capabilities` for the canonical tool list, recommended workflows, concurrency contract, and primer topic inventory.
+
+Endpoint: `https://assistant-be.surveycto.net/mcp`
+
+stdio-only clients can wrap with `mcp-remote`:
+
+```json
+{
+  "surveycto": {
+    "command": "npx",
+    "args": ["-y", "mcp-remote", "https://assistant-be.surveycto.net/mcp"]
+  }
+}
+```
+
+The full integration reference — tool surface, `xls_apply_patches` semantics, concurrency contract, error codes, and limits — lives in [`references/mcp.md`](references/mcp.md). `SKILL.md` keeps only the workflow that uses these tools.
 
 ## Development
 
@@ -159,9 +166,9 @@ zip -r surveycto-skill.zip . \
 3. Open a PR to `develop`
 4. Once merged and tested, bump the version in `SKILL.md` and merge `develop` into `main` to create a release
 
-## Maintaining the primers
+## Maintaining `references/`
 
-The six primers in `references/` have two different maintenance models, depending on whether the public documentation actually covers the topic.
+`references/` contains six primers (maintained as described below) plus the MCP server reference `mcp.md` (maintained from a separate source — see [Maintaining the MCP server reference](#maintaining-the-mcp-server-reference)). The primers themselves split into two maintenance models depending on whether the public documentation actually covers the topic.
 
 ### Docs-derived primers (regenerated periodically)
 
@@ -467,6 +474,23 @@ Before you conclude, double-check everything for accuracy. Mistakes in these
 materials can affect production SurveyCTO forms and user-facing data collection
 workflows.
 ```
+
+### Maintaining the MCP server reference
+
+`references/mcp.md` documents the SurveyCTO MCP server's tool surface, patch semantics, concurrency contract, error envelope, and limits. Unlike the primers, it is not derived from public SurveyCTO documentation — it is derived from the MCP server's own implementation in the private [`scto-assistant-be`](https://github.com/SurveyCTO/scto-assistant-be) repo. The canonical sources are the tool definitions, capability discovery payload, and error-handling code in that repo.
+
+Update `mcp.md` whenever the server's tool surface changes:
+
+- Tools added, removed, or renamed
+- Tool signatures (parameter names, defaults, caps) changed
+- Patch op support changed (new ops, new column aliases, new validation behavior)
+- Error codes added, removed, or repurposed
+- Limits changed (upload size, session TTL, page size, `top_k` cap)
+- Concurrency rules changed
+
+There is no AI-agent prompt for regenerating this file because no agent reading public sources can produce it accurately — the truth lives in `scto-assistant-be`. When the server changes, update `mcp.md` by hand from the relevant source files in that repo, then bump the skill version per the rules in [Versioning](#versioning) (typically a minor bump for additive changes, major for breaking changes since the agent's MCP workflow depends on this content).
+
+This file is **not** vendored back to the MCP server via `get_surveycto_primer` — it would be circular, and the server already exposes its current tool surface live via `get_surveycto_mcp_capabilities`.
 
 ### Syncing primers to the MCP server
 
