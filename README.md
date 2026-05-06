@@ -2,7 +2,74 @@
 
 An [Agent Skill](https://agentskills.io) that gives AI agents SurveyCTO domain expertise: designing, editing, and debugging [SurveyCTO](https://www.surveycto.com) forms (XLSForm `.xlsx` files), server datasets (XML definitions), Data Explorer workbook definitions, and field plug-ins (`.fieldplugin.zip` bundles).
 
-The skill is fully usable on its own. Pair it with the **SurveyCTO MCP server** for built-for-purpose XLSForm file operations and live knowledge-base search; without those tools the skill still imparts the expertise the agent needs, falling back to generic xlsx tooling, web fetches of the live docs, or conversational guidance.
+This skill is most useful within a desktop AI agent like Claude Cowork or OpenAI Codex (as opposed to a cloud-based AI chatbot). It is also best paired with the **SurveyCTO MCP server** for built-for-purpose XLSForm file operations and live knowledge-base search; without those tools the skill still imparts the expertise the agent needs, falling back to generic xlsx tooling, web fetches of the live docs, or conversational guidance.
+
+## Download
+
+**Latest stable release (always up to date):**
+
+[**surveycto-skill.zip**](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip)
+
+This URL always points to the most recent release. You can also browse all releases on the [releases page](../../releases). The same zip is used for every host below. Pair it with the **SurveyCTO MCP server** at `https://assistant-be.surveycto.net/mcp` for the best experience — the per-host steps below cover both pieces.
+
+## Installation
+
+For the best experience, install **both** the skill and the SurveyCTO MCP server in your agent host. The skill works on its own, but the MCP server adds purpose-built XLSForm tools and live knowledge-base search.
+
+### Claude Cowork
+
+Claude Cowork has a UI for both pieces.
+
+1. Open the sidebar and click **Customize**.
+2. Click **Create skill… → Upload a skill** and upload [surveycto-skill.zip](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip).
+3. Click into **Connectors** and then **Add custom connector**.
+4. Enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
+5. Once the connector is added, click **Always allow** for each of the SurveyCTO tools.
+
+Tip: go into your Claude billing settings and enable extra usage so that your agent can continue working even after you've hit your subscription-level usage quota.
+
+### OpenAI Codex
+
+As of this writing, Codex doesn't have a UI for managing skills, so install the skill by unzipping it into `~/.agents/skills/surveycto`:
+
+```bash
+mkdir -p ~/.agents/skills/surveycto
+unzip surveycto-skill.zip -d ~/.agents/skills/surveycto
+```
+
+Codex *does* have a UI for MCP servers:
+
+1. Open Codex settings and click **MCP servers**.
+2. Click **+ Add server**, then enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
+3. If SurveyCTO capabilities don't appear in new chats, restart Codex.
+
+When Codex starts using SurveyCTO capabilities it will prompt for permission on every tool call. Select **Always allow** in those prompts to permanently approve each tool, so Codex gets less tiresome to use and can work more independently over time.
+
+### Other Agent Skills-compatible tools
+
+This skill follows the [Agent Skills](https://agentskills.io) open standard. For tools like Claude Code, Cursor, VS Code Copilot, Gemini CLI, Roo Code, and others, consult the host's documentation for installing skills and MCP servers. In general:
+
+- **Skill**: extract `surveycto-skill.zip` into the host's skills directory (often `~/.<host>/skills/surveycto` or similar).
+- **MCP server**: register `https://assistant-be.surveycto.net/mcp` (Streamable HTTP, no auth). For stdio-only clients, wrap it with `mcp-remote`:
+
+  ```json
+  {
+    "surveycto": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://assistant-be.surveycto.net/mcp"]
+    }
+  }
+  ```
+
+## Usage
+
+Once installed, the skill activates automatically when you:
+
+- Ask about SurveyCTO, XLSForm, or survey form design
+- Work with `.xlsx` files containing `survey`/`choices`/`settings` worksheets
+- Work with XML files containing `<dataset>` elements
+- Mention data collection forms, skip logic, constraints, or choice lists
+- Ask about field plug-ins
 
 ## What's included
 
@@ -47,70 +114,6 @@ stdio-only clients can wrap with `mcp-remote`:
 ```
 
 The full integration reference — tool surface, `xls_apply_patches` semantics, concurrency contract, error codes, and limits — lives in [`references/mcp.md`](references/mcp.md). `SKILL.md` keeps only the workflow that uses these tools.
-
-## Download
-
-**Latest stable release (always up to date):**
-
-[**surveycto-skill.zip**](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip)
-
-This URL always points to the most recent release. You can also browse all releases on the [releases page](../../releases). The same zip is used for every host below. Pair it with the **SurveyCTO MCP server** at `https://assistant-be.surveycto.net/mcp` for the best experience — the per-host steps below cover both pieces.
-
-## Installation
-
-For the best experience, install **both** the skill and the SurveyCTO MCP server in your agent host. The skill works on its own, but the MCP server adds purpose-built XLSForm tools and live knowledge-base search.
-
-### Claude Cowork
-
-Claude Cowork has a UI for both pieces.
-
-1. Open the sidebar and click **Customize**.
-2. Click **Create skill… → Upload a skill** and upload [surveycto-skill.zip](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip).
-3. Click into **Connectors** and then **Add custom connector**.
-4. Enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
-5. Once the connector is added, click **Always allow** for each of the SurveyCTO tools.
-
-### OpenAI Codex
-
-As of this writing, Codex doesn't have a UI for managing skills, so install the skill by unzipping it into `~/.agents/skills/surveycto`:
-
-```bash
-mkdir -p ~/.agents/skills/surveycto
-unzip surveycto-skill.zip -d ~/.agents/skills/surveycto
-```
-
-Codex *does* have a UI for MCP servers:
-
-1. Open Codex settings and click **MCP servers**.
-2. Click **+ Add server**, then enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
-3. If SurveyCTO capabilities don't appear in new chats, restart Codex.
-
-When Codex starts using SurveyCTO capabilities it will prompt for permission on every tool call. Select **Always allow** in those prompts to permanently approve each tool, so Codex gets less tiresome to use and can work more independently over time.
-
-### Other Agent Skills-compatible tools
-
-This skill follows the [Agent Skills](https://agentskills.io) open standard. For tools like Claude Code, Cursor, VS Code Copilot, Gemini CLI, Roo Code, and others, consult the host's documentation for installing skills and MCP servers. In general:
-
-- **Skill**: extract `surveycto-skill.zip` into the host's skills directory (often `~/.<host>/skills/surveycto` or similar).
-- **MCP server**: register `https://assistant-be.surveycto.net/mcp` (Streamable HTTP, no auth). For stdio-only clients, wrap it with `mcp-remote`:
-
-  ```json
-  {
-    "surveycto": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "https://assistant-be.surveycto.net/mcp"]
-    }
-  }
-  ```
-
-## Usage
-
-Once installed, the skill activates automatically when you:
-
-- Ask about SurveyCTO, XLSForm, or survey form design
-- Work with `.xlsx` files containing `survey`/`choices`/`settings` worksheets
-- Work with XML files containing `<dataset>` elements
-- Mention data collection forms, skip logic, constraints, or choice lists
 
 ## Development
 
