@@ -22,19 +22,8 @@ jobs:
 
       - name: Build zip
         run: |
-          zip -r surveycto-skill.zip . \
-            -x '.git/*' \
-            -x '.github/*' \
-            -x '.gitignore' \
-            -x 'README.md' \
-            -x 'LICENSE' \
-            -x '*.zip' \
-            -x '.DS_Store' \
-            -x 'Thumbs.db' \
-            -x '**/.DS_Store' \
-            -x '**/Thumbs.db' \
-            -x '.kilo/*' \
-            -x 'planning/*'
+          zip -r surveycto-skill.zip SKILL.md references assets \
+            -x '**/.DS_Store' -x '**/Thumbs.db'
 
       - name: Create or update release
         uses: softprops/action-gh-release@v2
