@@ -377,6 +377,10 @@ Behavior caveats:
 
 ### 1. Local fast loop (this skill ships a harness)
 
+When authoring or editing a plug-in inside an agent session, the local
+harness is the default in-agent preview surface — render it as soon as
+the four core files are in place, and re-render after every revision.
+
 Use the bundled test harness in `assets/field-plugin-test-harness/`:
 
 - **`validate.mjs`** — a Node script that statically validates the plug-in
@@ -394,14 +398,37 @@ for usage and limits.
 
 ### 2. SurveyCTO field plug-in console (final validation, required)
 
-The form designer's test view includes a **field plug-in console** that
-shows live HTML/CSS/JS edit panes, a Reload button, the current
-`fieldProperties` payload, persisted metadata, and any messages the plug-in
-has produced. See [Testing field plug-ins](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/07.testing-field-plug-ins.html).
+The form designer's test view includes a **field plug-in console** for
+previewing live code changes against the real form context.
 
-Edits made in the console are session-scoped and **not** saved back to the
-zip — use it to validate behavior, then propagate fixes to your source
-files and rebuild the zip.
+To open it:
+
+1. In the SurveyCTO form designer, click *Test* — the top-right toggle
+   inside the designer, or the *Test* button next to the form on the
+   Design tab — to enter test view. *Test* is a form-level action, not
+   a per-field action.
+2. Navigate to the field that uses the plug-in. An icon button appears
+   on the left edge of the form area; click it to expand the console.
+   You can drag to resize.
+
+The console shows three things:
+
+- **Plug-in details** — name, version, author, supported field types,
+  filename.
+- **Current values** — the actual current values of any dynamic
+  parameters and metadata, given the live form context.
+- **Live code preview** — three editable boxes (HTML, CSS, JS) plus a
+  *Reload* button. Edits persist for the test-view session as you
+  navigate between fields.
+
+Edits made in the console are session-scoped and **not** saved back to
+the zip — use the console to validate behavior, then propagate fixes
+to your source files and re-upload the `.fieldplugin.zip` (bumping
+`manifest.version`).
+
+For log-level debugging, prefer the local harness or browser devtools
+(web forms); the in-product console does not surface a generic JS
+console. See [Testing field plug-ins](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/07.testing-field-plug-ins.html).
 
 ### 3. Browser devtools and CodePen
 
@@ -534,7 +561,7 @@ baseline-text itself, so they are not gaps in the bundled template.
    - Output data shape (what `setAnswer` produces) and what metadata you persist with `setMetaData`.
    - Error handling: how required/constraint messages render, what happens on bad parameters.
    - External libraries (kept minimal — every byte ships with the form).
-4. **Implement in milestones.** After each milestone, run `validate.mjs` and exercise the change in `preview.html`. Then test in the in-product field plug-in console.
+4. **Implement in milestones.** After each milestone, re-render `preview.html` so the user can see the current state and run `validate.mjs` for static checks. Once the harness looks right, gate deployment on the in-product field plug-in console (final validation), then a real-device pass on each target platform.
 5. **Get a code review.** Either a peer or a second LLM session — plug-ins are user-facing UI shipping inside a form, so a fresh pair of eyes catches a lot.
 6. **Document.** Include a `README.md` in the source repo (parameters, behaviors, screenshots) and ship a **test form** that exercises the plug-in.
 

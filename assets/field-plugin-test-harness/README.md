@@ -1,9 +1,12 @@
 # Field plug-in test harness
 
 A pair of zero-dependency tools that give you a fast local feedback loop
-when authoring SurveyCTO field plug-ins. Use them in the loop, then run
-final validation in SurveyCTO's in-product field plug-in console (the
-form designer's test view).
+when authoring SurveyCTO field plug-ins. `preview.html` is the default
+in-agent preview surface for newly created or edited plug-ins — render
+it as soon as the four core files exist and re-render after every
+revision. Use the harness in the loop, then run final validation in
+SurveyCTO's in-product field plug-in console (the form designer's test
+view).
 
 | Tool | Use when |
 | --- | --- |
