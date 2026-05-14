@@ -21,7 +21,7 @@ metadata:
 
 # SurveyCTO Form, Plug-in, and Dataset Authoring
 
-**Skill version: 1.0.0-beta.3.** If the SurveyCTO MCP server tools suggest an update, pass that suggestion along to the user.
+**Skill version: 1.0.0-beta.3.** If a SurveyCTO MCP tool response includes a required or preferred version suggested for this skill, pass that along to the user.
 
 SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
