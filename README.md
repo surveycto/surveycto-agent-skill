@@ -157,9 +157,8 @@ metadata:
 ```
 
 ```markdown
-# SurveyCTO Form and Dataset Authoring
-
-**Skill version: 1.0.0-beta.** …
+...
+**Skill version: 1.0.0-beta.** - ...
 ```
 
 Before merging `develop` into `main`, bump the version in **both** places first. The release workflow reads the frontmatter to create the Git tag and GitHub Release name (e.g., `"1.0.0-beta"` → tag `v1.0.0-beta`, release `v1.0.0-beta`); the body line is what the agent reports to users.

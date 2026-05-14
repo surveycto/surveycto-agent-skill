@@ -17,6 +17,10 @@ jobs:
         id: version
         run: |
           VERSION=$(grep -A5 '^metadata:' SKILL.md | grep 'version:' | sed 's/.*version: *"\?\([^"]*\)"\?/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "Failed to parse version from SKILL.md" >&2
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Detected version: $VERSION"
 
