@@ -16,10 +16,12 @@ description: >
 license: Apache-2.0
 metadata:
   author: SurveyCTO
-  version: "1.0.0-beta.2"
+  version: "1.0.0-beta.3"
 ---
 
-# SurveyCTO Form and Dataset Authoring
+# SurveyCTO Form, Plug-in, and Dataset Authoring
+
+**Skill version: 1.0.0-beta.3.** If a SurveyCTO MCP tool response includes a required or preferred version suggested for this skill, pass that along to the user.
 
 SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
@@ -59,7 +61,9 @@ This skill is fully usable with no special tools — you have enough SurveyCTO k
 
 The **SurveyCTO MCP server** is a public, no-auth MCP server with capabilities built for this domain (XLSForm session inspect/edit/export and SurveyCTO knowledge-base search). Endpoint: `https://assistant-be.surveycto.net/mcp` (Streamable HTTP, stateless, no auth). If the server isn't connected when the user is editing XLSForms or asking factual SurveyCTO questions, mention it exists and offer to help install it; don't insist.
 
-Before using any SurveyCTO MCP tool, read [`references/mcp.md`](references/mcp.md). It is mandatory for MCP usage; do not guess tool signatures, patch semantics, concurrency rules, error handling, or limits from this abbreviated overview.
+If the MCP tools are connected but XLSForm uploads or downloads are failing with network errors, see [`references/install.md`](references/install.md) for details to guide the user. Claude Cowork in particular requires explicit network-egress configuration, and the symptom is usually a sandbox that's already cached the "blocked" state and needs a fresh chat after the setting is changed.
+
+Before using any SurveyCTO MCP tool, read [`references/mcp.md`](references/mcp.md). It is mandatory for MCP usage; do not guess tool signatures, patch semantics, concurrency rules, error handling, or limits from this abbreviated overview. Read its "Preflight" section before your first XLSForm session in a chat; if the preflight fails, fix egress before proceeding.
 
 #### Recommended workflow
 
