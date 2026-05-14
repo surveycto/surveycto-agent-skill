@@ -179,6 +179,7 @@ locally, mirror what the workflows do — include only what's part of
 the skill bundle:
 
 ```bash
+rm -f surveycto-skill.zip
 zip -r surveycto-skill.zip SKILL.md references assets \
   -x '**/.DS_Store' -x '**/Thumbs.db'
 ```
