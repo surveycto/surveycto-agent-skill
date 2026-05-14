@@ -140,8 +140,8 @@ The full integration reference — tool surface, `xls_apply_patches` semantics, 
 
 This repo uses a `develop` → `main` branching model:
 
-- **`develop`** — active development; pushes here produce a `surveycto-skill-dev.zip` build artifact
-- **`main`** — stable releases; pushes here create a GitHub Release with `surveycto-skill.zip` attached
+- **`develop`** — active development; pushes here produce a `surveycto-skill-dev.zip` build artifact (GitHub Actions workflow artifact, not committed)
+- **`main`** — stable releases; pushes here create a GitHub Release with `surveycto-skill.zip` attached (built and published by the release workflow; not committed to the repo)
 
 ### Versioning
 
@@ -152,7 +152,7 @@ The skill version lives in **two** places that must be kept in sync:
 
 ```yaml
 metadata:
-  author: SurveyCTO
+  author: Dobility, Inc. (SurveyCTO)
   version: "1.0.0-beta"
 ```
 
@@ -172,21 +172,21 @@ Use [semantic versioning](https://semver.org):
 
 ### Building the zip locally
 
+The release zip is produced by GitHub Actions on push to `main` (and a
+matching dev zip is produced as a workflow artifact on push to
+`develop`); neither is committed to the repo. To smoke-test a build
+locally, mirror what the workflows do — include only what's part of
+the skill bundle:
+
 ```bash
-zip -r surveycto-skill.zip . \
-  -x '.git/*' \
-  -x '.github/*' \
-  -x '.gitignore' \
-  -x 'README.md' \
-  -x 'LICENSE' \
-  -x '*.zip' \
-  -x '.DS_Store' \
-  -x 'Thumbs.db' \
-  -x '**/.DS_Store' \
-  -x '**/Thumbs.db' \
-  -x '.kilo/*' \
-  -x 'planning/*'
+zip -r surveycto-skill.zip SKILL.md references assets \
+  -x '**/.DS_Store' -x '**/Thumbs.db'
 ```
+
+The skill bundle is exactly `SKILL.md` + `references/` + `assets/`;
+everything else in the repo (this README, `LICENSE`, `AGENTS.md`,
+`.github/`, `.kilo/`, `planning/`, etc.) is repo tooling and stays
+out of the zip by virtue of not being included.
 
 ### Making changes
 
@@ -491,12 +491,41 @@ do not expand into a verbatim copy of the upstream docs. In particular:
 - Keep all edited files ASCII unless an existing file or upstream API name
   requires otherwise.
 
+Invariants to preserve (do not regress these regardless of what the
+upstream docs emphasize or omit):
+- The "preview by default while authoring" behavior in `SKILL.md`'s
+  field plug-in *Testing* subsection: when an agent creates or edits a
+  plug-in, it should render
+  `assets/field-plugin-test-harness/preview.html` immediately and
+  re-render after every revision.
+- The proactive "recommend testing as a next step" behavior rule: after
+  authoring or revising plug-in source files, the agent should
+  re-render the harness and recommend the in-product field plug-in
+  console as the required next step before deployment, plus a
+  real-device pass before going live.
+- An accurate description of the in-product field plug-in console flow
+  per https://docs.surveycto.com/02-designing-forms/03-advanced-topics/07.testing-field-plug-ins.html:
+  *Test* is a form-level action (Design tab button or top-right toggle
+  in the form designer); the user navigates to the field that uses the
+  plug-in and clicks the plug-in console icon on the left edge of the
+  form area; the panel shows plug-in details, current values of dynamic
+  parameters and metadata, and three editable HTML/CSS/JS boxes with a
+  *Reload* button; edits are session-scoped and not saved to the zip.
+- Do not assert that the in-product console exposes the full
+  `fieldProperties` payload, persisted-metadata storage, or a generic
+  JS message/log surface unless a future revision of the docs page
+  above actually documents them. For log-level debugging, point
+  readers at the local harness or browser devtools.
+
 Validation:
 - Run the field plug-in harness validator against `assets/field-plugin-template/`.
 - If the repo has tests or lint/build scripts relevant to the changed files,
   run them.
 - Manually check that every field plug-in source link in
   `references/field-plugins.md` still resolves.
+- Verify the in-product field plug-in console description in
+  `SKILL.md` and `references/field-plugins.md` against the live
+  *Testing field plug-ins* docs page before finishing.
 - Summarize which upstream changes were incorporated and which files changed.
 
 Before you conclude, double-check everything for accuracy. Mistakes in these

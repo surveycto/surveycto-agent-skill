@@ -15,7 +15,7 @@ description: >
   assets/xlsform-template.xlsx — never built from scratch.
 license: Apache-2.0
 metadata:
-  author: SurveyCTO
+  author: Dobility, Inc. (SurveyCTO)
   version: "1.0.0-beta.3"
 ---
 
@@ -359,8 +359,11 @@ Follow the decision order above. Concretely:
 
 ### Testing
 
-- **Local fast loop:** [`assets/field-plugin-test-harness/`](assets/field-plugin-test-harness/) ships `validate.mjs` (static checks) and `preview.html` (a single self-contained browser harness that renders the plug-in against editable fixtures with a stubbed host bridge). The harness works as an inline HTML/JS artifact in agent UIs that support them — pre-populate the textareas with the plug-in source and update them as the plug-in evolves.
-- **Final validation:** the in-product **field plug-in console** in the form designer's test view. Required before deployment; the local harness's stubs are not a complete substitute for real Android/iOS/web form runtimes.
+- **Preview by default while authoring.** When you create or edit a plug-in inside this skill, render [`assets/field-plugin-test-harness/preview.html`](assets/field-plugin-test-harness/preview.html) immediately so the user can see the result, and re-render after every revision. In agent UIs that support inline HTML/JS artifacts, serve it as an artifact pre-populated with the four core files; otherwise point the user at the file on disk. Also run `validate.mjs` (static checks on the bundle — manifest schema, file presence, naming rules) after every change.
+- **Final validation in the in-product field plug-in console (required before deployment).** In the SurveyCTO form designer, click *Test* (top-right toggle, or the *Test* button next to the form on the Design tab) to enter test view. Navigate to the field that uses the plug-in; an icon button appears on the left edge of the form area — click it to expand the console. It shows the plug-in's details (name, version, author, supported field types, filename), the current values of any dynamic parameters and metadata, and three editable boxes (HTML/CSS/JS) with a *Reload* button for previewing live code edits. Console edits are session-scoped and **not** saved to the `.zip`; copy fixes back to your source files and re-upload. The local harness's stubs are not a substitute for the real Android/iOS/web runtimes. See [Testing field plug-ins](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/07.testing-field-plug-ins.html).
+- **Real-device pass** before going live: SurveyCTO Collect on a representative Android device, Collect for iOS, and at least one desktop browser for web forms.
+
+**Agent behavior rule:** after creating or revising plug-in source files, proactively (a) re-render the harness so the user can see the current state, and (b) recommend the in-product field plug-in console as the required next step (with the one-line "Form Designer → *Test* → navigate to the field → click the plug-in console icon" reminder). Do not present the work as done before the user has had a chance to validate there.
 
 For everything else — full manifest schema, form API (field properties, runtime CSS classes, provided/called JS functions), parameters and metadata model, Android-only intent and phone APIs, and common pitfalls — see [`references/field-plugins.md`](references/field-plugins.md).
 
