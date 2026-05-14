@@ -77,13 +77,20 @@ This skill follows the [Agent Skills](https://agentskills.io) open standard. For
 
 ## How to use
 
-Once installed, the skill activates automatically when you:
+In principle, the skill activates automatically when you:
 
 - Ask about SurveyCTO, XLSForm, or survey form design
 - Work with `.xlsx` files containing `survey`/`choices`/`settings` worksheets
 - Work with XML files containing `<dataset>` elements
 - Mention data collection forms, skip logic, constraints, or choice lists
 - Ask about field plug-ins
+
+**In practice, automatic activation is unreliable** — agents often answer SurveyCTO questions from their generic training data without ever loading the skill, which defeats the point. To guarantee the skill is used, invoke it explicitly:
+
+- In hosts that support slash-command skill invocation (e.g., Claude Cowork), start your message with `/surveycto`.
+- In any host, prefix your request with something like "Using the SurveyCTO skill, …" or "Load the SurveyCTO skill and then …".
+
+After sending the request, check the agent's response (or its tool-use trace) to confirm it actually loaded the skill — most hosts show a "Skill: surveycto" badge, a `skill` tool call, or a similar indicator. If you don't see one, the agent is winging it, and the answer is likely to disappoint. Re-prompt explicitly until the skill is loaded.
 
 ## What's included
 
