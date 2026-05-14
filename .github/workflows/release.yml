@@ -20,6 +20,20 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Detected version: $VERSION"
 
+      - name: Check if release already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; will refresh asset only."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release $TAG does not exist; will create."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build zip
         run: |
           zip -r surveycto-skill.zip . \
@@ -36,7 +50,8 @@ jobs:
             -x '.kilo/*' \
             -x 'planning/*'
 
-      - name: Create or update release
+      - name: Create release
+        if: steps.check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
@@ -44,11 +59,18 @@ jobs:
           body: |
             SurveyCTO Agent Skill v${{ steps.version.outputs.version }}
 
-            Download `surveycto-skill.zip` and install it in your agent platform:
-            - **Claude Cowork**: sidebar > Customize > Create skill… > Upload a skill
-            - **OpenAI Codex**: extract to `~/.agents/skills/surveycto/`
-            - **Other Agent Skills-compatible tools**: extract into the host's skills directory (often `~/.<host>/skills/surveycto/`); see the README for details
-
-            Pair the skill with the SurveyCTO MCP server at `https://assistant-be.surveycto.net/mcp` for purpose-built XLSForm tools and live knowledge-base search. Full per-host install steps are in the [README](https://github.com/surveycto/surveycto-agent-skill#installation).
+            Download `surveycto-skill.zip` below and follow the install steps in the [README](https://github.com/surveycto/surveycto-agent-skill/blob/main/README.md) for your agent platform.
+          append_body: true
+          generate_release_notes: true
           files: surveycto-skill.zip
           make_latest: true
+
+      - name: Refresh asset on existing release
+        if: steps.check.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ steps.version.outputs.version }}
+        run: |
+          gh release upload "$TAG" surveycto-skill.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
