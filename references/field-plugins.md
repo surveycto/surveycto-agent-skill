@@ -47,6 +47,8 @@ Plug-ins **cannot** be attached to `date`, `time`, `datetime`, `geopoint`,
 For ready-made plug-ins, see the [field plug-in catalog](https://support.surveycto.com/hc/en-us/articles/360045235134-Field-plug-in-catalog).
 For an LLM-assisted authoring workflow, see [A non-developer's guide to using GenAI to build field plug-ins](https://www.surveycto.com/data-collection-quality/build-field-plugins-genai/).
 
+**Before designing form-side data flow around an existing plug-in, read its own README.** Catalog and `baseline-*` plug-ins document their accepted input formats and parameter shapes. Building a SurveyCTO-side conversion layer (hidden `calculate` fields, extra dataset columns, string manipulation) before checking the README is a common source of wasted work — the plug-in often already accepts the raw form value or has a parameter for the format you have.
+
 ## Anatomy and packaging
 
 ### Required files (case-sensitive names, all at zip root)
