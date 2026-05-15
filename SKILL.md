@@ -16,12 +16,12 @@ description: >
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
-  version: "1.0.0-beta.3"
+  version: "1.0.0-beta.4"
 ---
 
 # SurveyCTO Form, Plug-in, and Dataset Authoring
 
-**Skill version: 1.0.0-beta.3.** If a SurveyCTO MCP tool response includes a required or preferred version suggested for this skill, pass that along to the user.
+**Skill version: 1.0.0-beta.4.** If a SurveyCTO MCP tool response includes a required or preferred version suggested for this skill, pass that along to the user.
 
 SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
@@ -74,8 +74,8 @@ Before using any SurveyCTO MCP tool, read [`references/mcp.md`](references/mcp.m
    1. Load the user's workbook (do not regenerate). `start_xlsform_session` for a fresh upload, or `get_xlsform_summary` if resuming an existing `session_id`.
    2. **Take a starting inventory from `form_summary` before patching or paging rows.** Note existing column names, choice lists (especially reusable ones like `yesno`), settings values, and any warnings. Do not assume spellings or values from memory.
    3. `xls_get_rows` / `xls_get_row` to inspect rows you intend to touch. Parallel calls are fine.
-   4. `xls_apply_patches` — **batch all related edits into one call**. Use `validate_only=true` on the full batch for risky changes. Update settings via `change_setting`, not `edit_row`. For large batches set `return_form_summary=false` and `include_details=false`.
-   5. `export_xlsform` → hand the `download_url` or resource link to the user. Avoid `format="base64"` for real workbooks. **If the form references any `custom-<name>` appearances, remind the user to attach the matching `.fieldplugin.zip` files in the SurveyCTO console at upload time** — this skill and the MCP server only edit local files.
+   4. `xls_apply_patches` — **batch all related edits into one call**. Use `validate_only=true` on the full batch for risky changes. Update settings via `change_setting`, not `edit_row`. For large batches set `return_form_summary=false` and `include_details=false`, and trust a successful response — verify once at the end of the build, not after each batch (see [`references/mcp.md`](references/mcp.md) → *Trust patch success; verify once at the end*).
+   5. `export_xlsform` as soon as a form is in a deliverable state — **especially when more forms remain in the same chat**, so the user has each finished file in hand before you move on. Hand the file, `download_url`, or resource link to the user. Avoid `format="base64"` for real workbooks. **If the form references any `custom-<name>` appearances, remind the user to attach the matching `.fieldplugin.zip` files in the SurveyCTO console at upload time** — this skill and the MCP server only edit local files.
    6. Usually leave the session open until TTL expiry; only call `end_xlsform_session` for explicit cleanup.
 
 ### Generic spreadsheet/xlsx tooling
@@ -95,6 +95,12 @@ Prefer these over the bundled primers when verifying current product behavior.
 ### No file tooling at all
 
 You can still help: describe edits in prose ("add a row to the `survey` worksheet with `type=integer`, `name=age`, `label=Age in years`, `constraint=. >= 0 and . <= 120`"), explain expressions, debug logic, and validate the user's draft against the rules below. The user can apply changes themselves.
+
+### Conserving context with sub-agents (when your host supports them)
+
+*If the host supports delegation* (Cowork's Task tool, Claude Code's Task tool, etc.), use sub-agents to absorb read-heavy or context-bloating work when the parent agent does not need the raw tokens (only the conclusion). On long, multi-form builds in particular, context management is key.
+
+Candidates for delegation: **MCP egress preflight** (the upload check), **`kb_search` lookups**, **end-of-build verification** (try not to re-verify after every batch; that anxiety loop is the proximate cause of context exhaustion on long builds). Do **not** delegate the actual `xls_apply_patches` writes. Patches must be serialized per `session_id`; running them inside a sub-agent the parent can't synchronize against invites `session_conflict` errors. The parent owns writes, sub-agents can own reads and summarization.
 
 ## Authority hierarchy for knowledge questions
 

@@ -84,6 +84,16 @@ Resource: `xlsform://{session_id}/{version}` — read with `resources/read` for 
 - **Large batches:** Set `return_form_summary=false` and `include_details=false`, then call `get_xlsform_summary` only when you need a fresh summary.
 - **Dry runs:** Use `validate_only=true` for risky changes.
 
+### Trust patch success; verify once at the end
+
+The most expensive context drain on long XLSForm builds is not the patch responses themselves (those become cheap with `return_form_summary=false` and `include_details=false`) — it is the *anxiety loop* of re-fetching `get_xlsform_summary` and paging `xls_get_rows` after every batch to confirm the patch "really" applied. The server applies patches atomically; that confirmation is unnecessary and, on multi-form builds, has been the proximate cause of running out of context before file delivery.
+
+- A successful `xls_apply_patches` response — no `error` field, an incremented `new_version`, no unexpected entries in `summary.warnings`, and per-op counts in `summary` (`rows_added`, `rows_edited`, `rows_deleted`, `columns_added`, `columns_renamed`, `columns_deleted`, `fields_renamed`, `groups_renamed`, `lists_renamed`, `languages_renamed`, `settings_changed`) that match what you sent — is sufficient confirmation that the server applied the batch atomically. The patches you sent are the patches in the workbook.
+- All four success signals above are present regardless of `include_details`. The `include_details=false` mode only drops `summary.details` (the per-op trace listing each affected `excel_row` and similar); the per-op *counts* live at `summary.rows_added` / `rows_edited` / `rows_deleted` / … and `summary.warnings` always remains. For large batches, set `return_form_summary=false` and `include_details=false`. This is the **default recommendation** for sizable batches, not a fallback for when responses feel slow.
+- **Do not** call `get_xlsform_summary` or page `xls_get_rows` after *every* batch to double-check correctness. That is anxiety, not verification, and it burns context.
+- **Do** verify once at the end of the build, ideally from a sub-agent (see *Conserving context with sub-agents* in `SKILL.md`), comparing the final `form_summary` and a few spot-check rows against the intended plan. One verification pass at the end is enough.
+- If a specific patch *fails* — `session_conflict`, validation error, an unknown-column warning you did not expect — that is a different situation. Reload state with `get_xlsform_summary` (or targeted `xls_get_rows`), re-derive intent, and re-issue a single batched patch.
+
 ## Concurrency contract
 
 - Reads run in parallel.
@@ -96,7 +106,7 @@ Tool responses use `{"error": {"code": str, "message": str, "data": {...}}}`. Re
 
 | Code | Reaction |
 | --- | --- |
-| `session_not_found` | Session is invalid or expired (TTL 24 h). Tell the user; do not retry. Start a fresh session if they want to continue. |
+| `session_not_found` | Session is invalid or expired (TTL 24h). Tell the user; do not retry. Start a fresh session if they want to continue. |
 | `session_conflict` | Concurrent write collision. Reload state and re-derive intent (see concurrency contract above). |
 | `xlsx_too_large` | Input exceeds 50 MB. Ask the user to slim the workbook. |
 | `invalid_xlsform` | Input is not a valid XLSForm (bad ZIP, missing sheets, etc.). Surface the message; suggest starting from the bundled template. |
@@ -107,6 +117,14 @@ Tool responses use `{"error": {"code": str, "message": str, "data": {...}}}`. Re
 ## Limits worth remembering
 
 - XLSForm upload: 50 MB.
-- Session TTL: 24 h (check `expires_at` from start/summary).
+- Session TTL: 24h (check `expires_at` from start/summary).
 - `xls_get_rows.limit`: 100 max — page through larger sheets.
 - `kb_search.top_k`: 20 max.
+
+## Multi-form / multi-session builds
+
+When one chat covers several forms, a few operational rules keep the build resilient. (Session TTL itself is rarely the issue — 24h easily covers any realistic single-chat build — but partial progress is still worth banking.)
+
+- **Export each form as soon as it is in a deliverable state**, before moving on to the next one, and hand the `download_url` (or the downloaded file) to the user immediately. Once the user has the file, the rest of the build can crash, lose context, or be interrupted without losing finished work. Do not treat "export at the end of the chat" as the only delivery step.
+- **One session per form, opened in parallel**, is preferable to serially uploading, editing, exporting, and re-uploading the next form. Reads across sessions are independent and safe to interleave; only `xls_apply_patches` calls need to be serialized per `session_id`.
+- **Plan for host file-write restrictions.** Some hosts (notably Claude Cowork's workspace mount) allow creating new files but block overwriting existing ones without explicit user permission. When this is a possibility, download each `export_xlsform` result into a fresh outputs directory or under a versioned filename rather than overwriting the workspace copy — that way the build does not stall on a permission prompt mid-export.
