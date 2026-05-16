@@ -70,7 +70,8 @@ Before using any SurveyCTO MCP tool, read [`references/mcp.md`](references/mcp.m
 1. **Before any MCP tool call**: read [`references/mcp.md`](references/mcp.md), then call `get_surveycto_mcp_capabilities` when unsure to learn the current tool list and primer topics. If the work involves XLSForms, you must also have read [`references/xlsform.md`](references/xlsform.md) first — see [Prerequisite: read the XLSForm reference](#prerequisite-read-the-xlsform-reference).
 2. **Factual SurveyCTO questions**: `kb_search` → quote the returned URLs in your answer.
 3. **Create a new XLSForm**: follow the [Workflow: create a new form](#workflow-create-a-new-form) below — it is the canonical sequence and enforces the template-first rule.
-4. **Inspect or edit an existing XLSForm**:
+4. **Add, update, or verify form-label translations**: see [Workflow: translate form labels](#workflow-translate-form-labels) below, which points to [`references/translation.md`](references/translation.md).
+5. **Inspect or edit an existing XLSForm**:
    1. Load the user's workbook (do not regenerate). `start_xlsform_session` for a fresh upload, or `get_xlsform_summary` if resuming an existing `session_id`.
    2. **Take a starting inventory from `form_summary` before patching or paging rows.** Note existing column names, choice lists (especially reusable ones like `yesno`), settings values, and any warnings. Do not assume spellings or values from memory.
    3. `xls_get_rows` / `xls_get_row` to inspect rows you intend to touch. Parallel calls are fine.
@@ -203,6 +204,8 @@ This section applies regardless of which file-tooling path you're using (SurveyC
 
 One known-recurring gotcha worth flagging up front, because general ODK memory consistently gets it wrong: in multi-language forms, the **default language goes in the unsuffixed column** (`label`, `hint`, `constraint message`, …) and additional languages go in suffixed columns (e.g., `label:Spanish`). Putting the default language in a suffixed column and leaving the base empty silently breaks the form. Other divergences are documented in [`references/xlsform.md`](references/xlsform.md); read it.
 
+For translation work specifically, see [Workflow: translate form labels](#workflow-translate-form-labels) and [`references/translation.md`](references/translation.md).
+
 ### CRITICAL: Always start from the template
 
 Every new XLSForm **must** start from the bundled template at [`assets/xlsform-template.xlsx`](assets/xlsform-template.xlsx).
@@ -248,6 +251,10 @@ The template provides:
 - **settings** worksheet with headers and an auto-updating `version` formula
 - **help-survey**, **help-choices**, **help-settings** worksheets with reference documentation
 - Conditional formatting rules that color-code rows by field type
+
+#### Workflow: translate form labels
+
+Adding a language, updating translations after the source changes, or verifying existing translations is its own workflow. **Read [`references/translation.md`](references/translation.md) before starting** — don't improvise from the column-convention sketch in [`references/xlsform.md`](references/xlsform.md).
 
 ### Editing rules (apply to every path)
 
@@ -445,6 +452,7 @@ In the dataset XML, add a `<dataLink>` with:
 | --- | --- |
 | [`references/overview.md`](references/overview.md) | First — orientation, file types, how they fit together |
 | [`references/xlsform.md`](references/xlsform.md) | **Mandatory before any XLSForm work** — column conventions, expressions, groups/repeats, multi-language |
+| [`references/translation.md`](references/translation.md) | Adding, updating, or verifying form-label translations — workflow, preserve-verbatim rules, glossary handling, self-review, back-translation spot check, verification checklist |
 | [`references/expressions.md`](references/expressions.md) | Any expression work (relevance, constraint, calculation, choice_filter) |
 | [`references/datasets-xml.md`](references/datasets-xml.md) | Server dataset XML definitions |
 | [`references/data-explorer.md`](references/data-explorer.md) | Data Explorer dashboards |

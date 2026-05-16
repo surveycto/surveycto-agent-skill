@@ -255,7 +255,7 @@ Put settings in row 2.
 | `version` | Form definition version number. | Increase on every spreadsheet-definition update. It must be a single whole number whose digit count stays fixed across versions. SurveyCTO templates use an auto-incrementing timestamp formula. |
 | `public_key` | Public encryption key for end-to-end encrypted forms. | Add the public key to encrypt submissions. Encryption settings cannot be changed for an existing `form_id`; use a new `form_id` to change encryption status/key. |
 | `submission_url` | Submission URL for encrypted forms. | Included in SurveyCTO templates/help for encryption workflows. Keep aligned with the generated encrypted-form settings. |
-| `default_language` | Name of the base/default language. | New forms default to `english`; set this when base `label`, `hint`, `image`, and message columns are in another language. |
+| `default_language` | Name of the base/default language. | New forms default to `english`; set this when base `label`, `hint`, `image`, and message columns are in another language. For workflow guidance on *translating* labels (adding a language, updating after source changes, verifying existing translations), see [`translation.md`](translation.md). |
 | `instance_name` | Dynamic name for filled-in form instances. | Add the column manually; row 2 is an expression that evaluates to a string, such as `concat('HH SURVEY - ', ${hhid})`. |
 
 ## `pulldata()`, `search()`, And Attached Data
