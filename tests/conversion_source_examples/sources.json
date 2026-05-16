@@ -1,0 +1,88 @@
+{
+  "description": "Public source-format examples for form-conversion smoke tests. These files are repo test fixtures and are intentionally outside the skill bundle inclusion list.",
+  "examples": [
+    {
+      "platform": "kobo",
+      "file": "kobo/kobo_sample_xlsform.xlsx",
+      "source_url": "https://raw.githubusercontent.com/kobotoolbox/docs/485fe4fed42cbb765b4838cb7f8c9665a561d091/source/_static/files/getting_started_xlsform/sample_xlsform.xlsx",
+      "source_repo": "https://github.com/kobotoolbox/docs",
+      "license_note": "Official KoboToolbox docs sample; no explicit repository license found during fixture collection. Keep attribution if redistributed."
+    },
+    {
+      "platform": "kobo",
+      "file": "kobo/stats4sd_data_confirm_example.xlsx",
+      "source_url": "https://raw.githubusercontent.com/stats4sd/xlsform_examples/29047810a886f37d59efe6a1e97c6e21b609f015/Data%20Confirmation%20Example/Data%20Confirm%20Example.xlsx",
+      "source_repo": "https://github.com/stats4sd/xlsform_examples",
+      "license_note": "MIT License. Copyright holder per upstream repository.",
+      "support_files": [
+        {
+          "file": "kobo/FARMER_CSV.csv",
+          "source_url": "https://raw.githubusercontent.com/stats4sd/xlsform_examples/29047810a886f37d59efe6a1e97c6e21b609f015/Data%20Confirmation%20Example/FARMER_CSV.csv",
+          "note": "External CSV referenced by the XLSForm's search() and pulldata() expressions as Farmer_CSV. Upstream filename is uppercase."
+        }
+      ]
+    },
+    {
+      "platform": "odk",
+      "file": "odk/odk_style_example.xlsx",
+      "source_url": "https://media.githubusercontent.com/media/getodk/docs/a94e95d702d9d8820b4d77ac1e4e722834b3c37e/docs/downloads/form-styling/style-example.xlsx",
+      "source_repo": "https://github.com/getodk/docs",
+      "license_note": "ODK Docs by Get ODK Inc.; CC BY 4.0.",
+      "support_files_note": "The workbook's examplesofsurvey sheet mentions media filenames such as img_test.jpg and audio_test.wav, but no same-directory paired media files were found in the pinned upstream repository tree."
+    },
+    {
+      "platform": "odk",
+      "file": "odk/odk_aggregate_example_form_v1_1.xlsx",
+      "source_url": "https://media.githubusercontent.com/media/getodk/docs/a94e95d702d9d8820b4d77ac1e4e722834b3c37e/docs/downloads/aggregate-form-update/example_form_v1.1.xlsx",
+      "source_repo": "https://github.com/getodk/docs",
+      "license_note": "ODK Docs by Get ODK Inc.; CC BY 4.0.",
+      "support_files": [
+        {
+          "file": "odk/odk_aggregate_example_form_v1_1.xml",
+          "source_url": "https://raw.githubusercontent.com/getodk/docs/a94e95d702d9d8820b4d77ac1e4e722834b3c37e/docs/downloads/aggregate-form-update/example_form_v1.1.xml",
+          "note": "Compiled XForm XML published alongside the XLSForm in ODK Docs. Not needed for SurveyCTO conversion, but useful as paired source-format context."
+        }
+      ]
+    },
+    {
+      "platform": "commcare",
+      "file": "commcare/commcare_multiple_choice_form.xml",
+      "source_url": "https://raw.githubusercontent.com/dimagi/commcare-hq/96c734211d6ba1e41890830c7dbb7735407a6a14/corehq/apps/export/tests/data/multiple_choice_form.xml",
+      "source_repo": "https://github.com/dimagi/commcare-hq",
+      "license_note": "BSD 3-Clause License; Dimagi Inc. and contributors."
+    },
+    {
+      "platform": "commcare",
+      "file": "commcare/commcare_subcase_repeat_form.xml",
+      "source_url": "https://raw.githubusercontent.com/dimagi/commcare-hq/96c734211d6ba1e41890830c7dbb7735407a6a14/corehq/apps/app_manager/tests/data/form_preparation_v2/subcase-repeat.xml",
+      "source_repo": "https://github.com/dimagi/commcare-hq",
+      "license_note": "BSD 3-Clause License; Dimagi Inc. and contributors."
+    },
+    {
+      "platform": "qualtrics",
+      "file": "qualtrics/compsy_most_common_questions.qsf",
+      "source_url": "https://raw.githubusercontent.com/compsy/svc-qualtrics-converter/ff4e06410e75fd2c01f7aeeeb93ee7d4a30044e5/input/survey.qsf",
+      "source_repo": "https://github.com/compsy/svc-qualtrics-converter",
+      "license_note": "MIT License."
+    },
+    {
+      "platform": "qualtrics",
+      "file": "qualtrics/distribution_builder_preview.qsf",
+      "source_url": "https://raw.githubusercontent.com/QuentinAndre/DistributionBuilder/9037f06890e45f51944136ba0f90e261ba351408/QualtricsExample.qsf",
+      "source_repo": "https://github.com/QuentinAndre/DistributionBuilder",
+      "license_note": "MIT License. Copyright (c) 2016 Quentin Andre.",
+      "support_files": [
+        {
+          "file": "qualtrics/distributionbuilder.css",
+          "source_url": "https://raw.githubusercontent.com/QuentinAndre/DistributionBuilder/9037f06890e45f51944136ba0f90e261ba351408/lib/distributionbuilder.css",
+          "note": "External CSS referenced by the QSF via jsDelivr."
+        },
+        {
+          "file": "qualtrics/distributionbuilder.min.js",
+          "source_url": "https://raw.githubusercontent.com/QuentinAndre/DistributionBuilder/9037f06890e45f51944136ba0f90e261ba351408/lib/distributionbuilder.min.js",
+          "note": "External JavaScript referenced by the QSF via jsDelivr."
+        }
+      ]
+    }
+  ]
+}

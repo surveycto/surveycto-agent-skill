@@ -13,7 +13,8 @@ jobs:
       - name: Build zip
         run: |
           zip -r surveycto-skill-dev.zip SKILL.md references assets \
-            -x '**/.DS_Store' -x '**/Thumbs.db'
+            -x '**/.DS_Store' -x '**/Thumbs.db' \
+            -x '**/__pycache__/*' -x '**/*.pyc' -x '**/*.pyo'
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

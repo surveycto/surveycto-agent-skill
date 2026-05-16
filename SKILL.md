@@ -6,12 +6,16 @@ description: >
   lists, repeat groups, skip patterns, constraints, calculations, dataset
   publishing, case management, Data Explorer workbook definitions, and
   field plug-ins (.fieldplugin.zip bundles attached to fields via
-  "custom-name" appearances). Use when the user mentions SurveyCTO,
-  XLSForm, ODK-based forms, survey forms, or data collection forms, or
-  when working with .xlsx files that contain survey/choices/settings
-  worksheets, XML files with dataset root elements, Excel workbook
-  definitions for data monitoring dashboards, or .fieldplugin.zip plug-in
-  bundles. New XLSForms always start from the bundled template at
+  "custom-name" appearances). Also covers converting form definitions
+  from other platforms — KoboToolbox or ODK XLSForms, CommCare XForms
+  XML, Qualtrics `.qsf` JSON exports, and other source formats — into
+  SurveyCTO XLSForms. Use when the user mentions SurveyCTO, XLSForm, 
+  ODK-based forms, survey forms, or data collection forms, when working 
+  with .xlsx files that contain survey/choices/settings worksheets, XML 
+  files with dataset root elements, Excel workbook definitions for data 
+  monitoring dashboards, or .fieldplugin.zip plug-in bundles, or when 
+  converting a form exported from another data collection platform into a 
+  SurveyCTO form. New XLSForms always start from the bundled template at 
   assets/xlsform-template.xlsx — never built from scratch.
 license: Apache-2.0
 metadata:
@@ -252,9 +256,15 @@ The template provides:
 - **help-survey**, **help-choices**, **help-settings** worksheets with reference documentation
 - Conditional formatting rules that color-code rows by field type
 
+**Template starter content is a helpful starting point, not a fixed requirement.** The starter rows (metadata fields, `caseid`, audit calculations) and the `yesno` choice list are included as conveniences for common cases. Keep standard metadata and audit rows by default because they are generally useful and not user-facing clutter; remove or replace them only when the source form or user request gives you a reason. Treat `caseid` as context-dependent: keep it for case-management work, but delete it when it would confuse a non-case draft. The `yesno` choice list is just an example choice list — drop or replace it freely when the form uses a different yes/no convention or no row references it. What's worth preserving is the *tooling*: the auto-updating `version` formula, the conditional formatting, the help worksheets, and the column-header structure. When you change starter content (e.g., rewrite a choice's `value`), be consistent — also update everything that references it.
+
 #### Workflow: translate form labels
 
 Adding a language, updating translations after the source changes, or verifying existing translations is its own workflow. **Read [`references/translation.md`](references/translation.md) before starting** — don't improvise from the column-convention sketch in [`references/xlsform.md`](references/xlsform.md).
+
+#### Workflow: convert a form from another platform
+
+Converting a form definition exported from another data collection platform — KoboToolbox or ODK (XLSForm `.xlsx`), CommCare (XForms `.xml`), Qualtrics (`.qsf` JSON), or anything else — into a SurveyCTO XLSForm is its own workflow. Note that the conversion is **best-effort and agent-driven**, and the SurveyCTO MCP XLSForm tools work **only on SurveyCTO-shaped XLSForms** (do not point them at the source file). **Read [`references/form-conversion.md`](references/form-conversion.md) before starting**, then load the matching platform-specific reference (`form-conversion-qualtrics.md`, `form-conversion-kobo.md`, `form-conversion-odk.md`, `form-conversion-commcare.md`) if one exists for the source platform; for platforms without a dedicated reference, the base workflow still applies.
 
 ### Editing rules (apply to every path)
 
@@ -453,6 +463,11 @@ In the dataset XML, add a `<dataLink>` with:
 | [`references/overview.md`](references/overview.md) | First — orientation, file types, how they fit together |
 | [`references/xlsform.md`](references/xlsform.md) | **Mandatory before any XLSForm work** — column conventions, expressions, groups/repeats, multi-language |
 | [`references/translation.md`](references/translation.md) | Adding, updating, or verifying form-label translations — workflow, preserve-verbatim rules, glossary handling, self-review, back-translation spot check, verification checklist |
+| [`references/form-conversion.md`](references/form-conversion.md) | **Mandatory before any form conversion** — platform-agnostic workflow for converting form definitions from other data collection platforms into SurveyCTO XLSForms, including the universal mapping concerns, the conversion-report contract, and pointers to platform-specific references |
+| [`references/form-conversion-qualtrics.md`](references/form-conversion-qualtrics.md) | Converting a Qualtrics `.qsf` JSON export — `.qsf` anatomy, question-type / selector mapping, display-logic translation, flow/branch handling, gotchas |
+| [`references/form-conversion-kobo.md`](references/form-conversion-kobo.md) | Converting a KoboToolbox XLSForm `.xlsx` — expression rewrites, Kobo-specific extensions (`kobo--matrix`, `kobo--score`, `kobo--rank`), settings differences |
+| [`references/form-conversion-odk.md`](references/form-conversion-odk.md) | Converting an ODK XLSForm `.xlsx` — expression rewrites, column-name normalization (`relevant`→`relevance`), field-type and settings differences |
+| [`references/form-conversion-commcare.md`](references/form-conversion-commcare.md) | Converting a CommCare XForms `.xml` export — XForms anatomy, parsing helper, itext → `label:Lang`, case-management caveats |
 | [`references/expressions.md`](references/expressions.md) | Any expression work (relevance, constraint, calculation, choice_filter) |
 | [`references/datasets-xml.md`](references/datasets-xml.md) | Server dataset XML definitions |
 | [`references/data-explorer.md`](references/data-explorer.md) | Data Explorer dashboards |

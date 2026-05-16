@@ -110,7 +110,8 @@ so the local artifact represents both the dev and release builds.
 ```bash
 rm -f surveycto-skill.zip
 zip -r surveycto-skill.zip SKILL.md references assets \
-  -x '**/.DS_Store' -x '**/Thumbs.db'
+  -x '**/.DS_Store' -x '**/Thumbs.db' \
+  -x '**/__pycache__/*' -x '**/*.pyc' -x '**/*.pyo'
 ```
 
 The local zip is gitignored. Don't commit it.
@@ -121,8 +122,9 @@ The skill bundle has a fixed structure: `SKILL.md` at the root,
 `references/`, and `assets/`. Listing those three things explicitly is
 more stable than excluding everything else — a new top-level file
 (another doc, a config dir, a tool) won't accidentally get bundled.
-The two `**/.DS_Store` / `**/Thumbs.db` exclusions catch OS clutter
-that may have crept into `references/` or `assets/`.
+The `**/.DS_Store`, `**/Thumbs.db`, `**/__pycache__/*`, `**/*.pyc`,
+and `**/*.pyo` exclusions catch OS and Python cache clutter that may
+have crept into `references/` or `assets/`.
 
 If you add a new top-level path that *should* ship in the skill, update
 both `.github/workflows/release.yml` and `.github/workflows/build-dev.yml`
@@ -141,6 +143,7 @@ both `.github/workflows/release.yml` and `.github/workflows/build-dev.yml`
 | `LICENSE` | Apache-2.0. **Excluded from the skill zip** (it's at the repo level, not the bundle level). |
 | `.kilo/` | Per-project Kilo config, plans, command/agent overrides. **Excluded from the skill zip.** |
 | `planning/` | Internal planning notes. **Excluded from the skill zip.** |
+| `tests/` | Test fixtures and validation assets. **Excluded from the skill zip.** |
 
 ## Quality bar
 

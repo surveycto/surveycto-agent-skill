@@ -41,7 +41,8 @@ jobs:
       - name: Build zip
         run: |
           zip -r surveycto-skill.zip SKILL.md references assets \
-            -x '**/.DS_Store' -x '**/Thumbs.db'
+            -x '**/.DS_Store' -x '**/Thumbs.db' \
+            -x '**/__pycache__/*' -x '**/*.pyc' -x '**/*.pyo'
 
       - name: Create release
         if: steps.check.outputs.exists == 'false'
