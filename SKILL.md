@@ -1,22 +1,20 @@
 ---
 name: surveycto
 description: >
-  Design, edit, and debug SurveyCTO forms (XLSForm .xlsx files) and server
-  datasets (XML definition files). Covers form logic, expressions, choice
-  lists, repeat groups, skip patterns, constraints, calculations, dataset
-  publishing, case management, Data Explorer workbook definitions, and
-  field plug-ins (.fieldplugin.zip bundles attached to fields via
-  "custom-name" appearances). Also covers converting form definitions
-  from other platforms — KoboToolbox or ODK XLSForms, CommCare XForms
-  XML, Qualtrics `.qsf` JSON exports, and other source formats — into
-  SurveyCTO XLSForms. Use when the user mentions SurveyCTO, XLSForm, 
-  ODK-based forms, survey forms, or data collection forms, when working 
-  with .xlsx files that contain survey/choices/settings worksheets, XML 
-  files with dataset root elements, Excel workbook definitions for data 
-  monitoring dashboards, or .fieldplugin.zip plug-in bundles, or when 
-  converting a form exported from another data collection platform into a 
-  SurveyCTO form. New XLSForms always start from the bundled template at 
-  assets/xlsform-template.xlsx — never built from scratch.
+  Design, edit, debug, and convert SurveyCTO forms (XLSForm .xlsx with
+  survey/choices/settings sheets), server datasets (.xml with a dataset
+  root element), Data Explorer workbook definitions, and field plug-ins
+  (.fieldplugin.zip bundles attached via `custom-name` appearances).
+  Covers form logic, expressions, choice lists, repeat groups, skip
+  patterns, constraints, calculations, dataset publishing, and case
+  management. Also covers converting forms from KoboToolbox/ODK
+  XLSForms, CommCare XForms XML, Qualtrics .qsf JSON, and other sources
+  into SurveyCTO XLSForms. Use when the user mentions SurveyCTO,
+  XLSForm, ODK-based forms, survey forms, or data collection forms;
+  when working with relevant .xlsx, .xml, or .fieldplugin.zip files;
+  or when converting a form from another platform. New XLSForms always
+  start from the bundled template at assets/xlsform-template.xlsx —
+  never built from scratch.
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
