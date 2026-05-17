@@ -242,7 +242,7 @@ Follow these steps in order:
 2. **Read [`references/xlsform.md`](references/xlsform.md) before designing any form content.** This is mandatory — not a lookup to do if confused later. Column conventions, multi-language structure, group/repeat rules, and expression syntax all have SurveyCTO-specific details that differ from general ODK knowledge. See [Prerequisite: read the XLSForm reference](#prerequisite-read-the-xlsform-reference).
 3. If MCP tools are available, read [`references/mcp.md`](references/mcp.md), then upload the copied file via `start_xlsform_session`. If MCP is unavailable, open the copied workbook directly with the best available spreadsheet/XLSX tooling.
 4. Read the starting structure fully before editing. With MCP, use the returned `form_summary`; without MCP, inspect the workbook sheets directly. Note next append location, exact column names already present, existing reusable choice lists, and current settings values.
-5. Apply related edits in one batch. With MCP, use a single `xls_apply_patches` call and `change_setting` for `form_id`, `form_title`, and `default_language`; without MCP, write directly into the copied workbook's existing worksheets.
+5. Apply related edits in one batch. With MCP, use a single `xls_apply_patches` call and `change_setting` for `form_id`, `form_title`, `default_language`, and/or `instance_name` (the only patch-addressable settings keys); without MCP, write directly into the copied workbook's existing worksheets.
 6. Export or save the result. With MCP, use `export_xlsform` and hand the `download_url` to the user. Remind the user to attach any required `.fieldplugin.zip` files in the SurveyCTO console at upload time.
 
 **Why the template is mandatory:** It contains conditional formatting rules, help worksheets, column headers, starter metadata fields, formula-based versioning, and pre-formatted rows that cannot be reliably recreated programmatically. Skipping the template produces files that are technically valid but painful for humans to edit in Excel.
@@ -296,7 +296,7 @@ Converting a form definition exported from another data collection platform — 
 - **Add skip logic**: write the expression into the `relevance` column on the target row.
 - **Add a constraint**: write the expression into `constraint` (use `.` for current value); write a user-facing message into `constraint message`.
 - **Add a calculation**: row with `type=calculate`, unique `name`, expression in `calculation`.
-- **Update settings**: with MCP, use `change_setting` for `form_title`, `form_id`, and `default_language`. Without MCP, write those values into row 2 of `settings`. Leave `version` alone.
+- **Update settings**: with MCP, use `change_setting` for `form_title`, `form_id`, `default_language`, and/or `instance_name` (the only patch-addressable settings keys; other columns such as `public_key` and `submission_url` must be written by hand to a downloaded workbook). Without MCP, write those values into row 2 of `settings`. Leave `version` alone.
 
 ### Validation checklist
 

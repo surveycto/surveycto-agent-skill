@@ -118,7 +118,8 @@ All comparisons are lexical (operands stringified) **except** `excel_row`, which
 
 - **Batching:** Batch related edits into one call and serialize calls per `session_id`.
 - **Allowed sheets:** Use `add_row`, `edit_row`, and `delete_row` only for `survey` and `choices`.
-- **Settings:** Use `change_setting` for row-2 settings such as `form_title`, `form_id`, and `default_language`; do not use `edit_row` on `settings`. `change_setting` creates the `settings` sheet if it is missing.
+- **Settings:** Use `change_setting` for row-2 settings — the patch-addressable keys are `form_id`, `form_title`, `default_language`, and `instance_name` ([submission-naming pattern](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/05.naming-forms.html)). Other settings columns (`public_key`, `submission_url`, etc.) cannot be set via `change_setting`. Do not use `edit_row` on `settings`. `change_setting` creates the `settings` sheet if it is missing.
+- **No `add_column` or `move_row`:** There is no `add_column` op — write the new column name in `add_row` / `edit_row` `values` to create it (see *Implicit column creation* above). There is no `move_row` op either; row reordering is not supported. The nearest workaround is `delete_row` plus a fresh `add_row` at the target position, but you will lose any columns you don't re-specify.
 - **`settings.version`:** Never patch it. The bundled template uses an auto-incrementing formula; `export_xlsform` recalculates it.
 - **Row-index stability:** All `excel_row` and `insert_before_excel_row` values are interpreted against the **original sheet state at the start of the call**. The tool adjusts indices internally across deletes and inserts so later operations in the same call still refer to the intended original rows. This is why batching all related edits into one call is the correct pattern — issuing them across separate calls forces you to recompute indices yourself.
 - **Implicit column creation:** When `add_row` or `edit_row` writes a column name that isn't an existing header, the tool creates the new column header immediately after the existing headers (a contiguous block). The response includes an `unknown_column_added` warning so you can review the result — most accidental new columns are misspellings, but custom/plug-in columns are legitimate.
@@ -149,7 +150,8 @@ All comparisons are lexical (operands stringified) **except** `excel_row`, which
  "old_header": "...", "new_header": "..."}
 
 {"op": "change_setting",
- "form_id": "...", "form_title": "...", "default_language": "..."}
+ "form_id": "...", "form_title": "...", "default_language": "...",
+ "instance_name": "concat('R-', ${respondent_id})"}
 
 {"op": "delete_column",
  "sheet": "survey"|"choices"|"settings", "header": "..."}

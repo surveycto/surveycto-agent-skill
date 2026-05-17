@@ -256,7 +256,7 @@ Put settings in row 2.
 | `public_key` | Public encryption key for end-to-end encrypted forms. | Add the public key to encrypt submissions. Encryption settings cannot be changed for an existing `form_id`; use a new `form_id` to change encryption status/key. |
 | `submission_url` | Submission URL for encrypted forms. | Included in SurveyCTO templates/help for encryption workflows. Keep aligned with the generated encrypted-form settings. |
 | `default_language` | Name of the base/default language. | New forms default to `english`; set this when base `label`, `hint`, `image`, and message columns are in another language. For workflow guidance on *translating* labels (adding a language, updating after source changes, verifying existing translations), see [`translation.md`](translation.md). |
-| `instance_name` | Dynamic name for filled-in form instances. | Add the column manually; row 2 is an expression that evaluates to a string, such as `concat('HH SURVEY - ', ${hhid})`. |
+| `instance_name` | Dynamic name for filled-in form instances. | Row 2 is an expression that evaluates to a string, such as `concat('HH SURVEY - ', ${hhid})`. With MCP, set it via `change_setting` (it is one of the patch-addressable keys); without MCP, add the column manually and write the expression into row 2. See [Naming forms](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/05.naming-forms.html). |
 
 ## `pulldata()`, `search()`, And Attached Data
 
