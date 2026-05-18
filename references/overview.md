@@ -57,6 +57,8 @@ When a primer and live documentation disagree, prefer live documentation. When a
 ## Where To Go Next
 
 - Read [`xlsform.md`](xlsform.md) when you need to edit, review, or generate SurveyCTO form definitions in `.xlsx` format.
+- Read [`translation.md`](translation.md) when you need to add, update, or verify translations of form labels in an XLSForm.
+- Read [`form-conversion.md`](form-conversion.md) when you need to convert a form definition exported from another data collection platform (KoboToolbox, ODK, CommCare, Qualtrics, or anything else) into a SurveyCTO XLSForm; that primer points to platform-specific references for first-class source platforms.
 - Read [`expressions.md`](expressions.md) when you need to write or debug relevance, constraints, calculations, choice filters, `pulldata()`, `search()`, or SurveyCTO-vs-ODK expression differences.
 - Read [`datasets-xml.md`](datasets-xml.md) when you need to inspect or modify server dataset definition XML, including `formLinks`, `dataLinks`, unique IDs, case datasets, or enumerator datasets.
 - Read [`data-explorer.md`](data-explorer.md) when you need to configure or troubleshoot Data Explorer workbook definitions, summaries, global filters, global exclusions, or attached dataset merges.

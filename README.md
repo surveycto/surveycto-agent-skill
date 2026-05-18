@@ -181,12 +181,13 @@ the skill bundle:
 ```bash
 rm -f surveycto-skill.zip
 zip -r surveycto-skill.zip SKILL.md references assets \
-  -x '**/.DS_Store' -x '**/Thumbs.db'
+  -x '**/.DS_Store' -x '**/Thumbs.db' \
+  -x '**/__pycache__/*' -x '**/*.pyc' -x '**/*.pyo'
 ```
 
 The skill bundle is exactly `SKILL.md` + `references/` + `assets/`;
 everything else in the repo (this README, `LICENSE`, `AGENTS.md`,
-`.github/`, `.kilo/`, `planning/`, etc.) is repo tooling and stays
+`.github/`, `.kilo/`, `planning/`, `tests/`, etc.) is repo tooling and stays
 out of the zip by virtue of not being included.
 
 ### Making changes

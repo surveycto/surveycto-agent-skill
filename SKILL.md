@@ -1,18 +1,20 @@
 ---
 name: surveycto
 description: >
-  Design, edit, and debug SurveyCTO forms (XLSForm .xlsx files) and server
-  datasets (XML definition files). Covers form logic, expressions, choice
-  lists, repeat groups, skip patterns, constraints, calculations, dataset
-  publishing, case management, Data Explorer workbook definitions, and
-  field plug-ins (.fieldplugin.zip bundles attached to fields via
-  "custom-name" appearances). Use when the user mentions SurveyCTO,
-  XLSForm, ODK-based forms, survey forms, or data collection forms, or
-  when working with .xlsx files that contain survey/choices/settings
-  worksheets, XML files with dataset root elements, Excel workbook
-  definitions for data monitoring dashboards, or .fieldplugin.zip plug-in
-  bundles. New XLSForms always start from the bundled template at
-  assets/xlsform-template.xlsx — never built from scratch.
+  Design, edit, debug, and convert SurveyCTO forms (XLSForm .xlsx with
+  survey/choices/settings sheets), server datasets (.xml with a dataset
+  root element), Data Explorer workbook definitions, and field plug-ins
+  (.fieldplugin.zip bundles attached via `custom-name` appearances).
+  Covers form logic, expressions, choice lists, repeat groups, skip
+  patterns, constraints, calculations, dataset publishing, and case
+  management. Also covers converting forms from KoboToolbox/ODK
+  XLSForms, CommCare XForms XML, Qualtrics .qsf JSON, and other sources
+  into SurveyCTO XLSForms. Use when the user mentions SurveyCTO,
+  XLSForm, ODK-based forms, survey forms, or data collection forms;
+  when working with relevant .xlsx, .xml, or .fieldplugin.zip files;
+  or when converting a form from another platform. New XLSForms always
+  start from the bundled template at assets/xlsform-template.xlsx —
+  never built from scratch.
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
@@ -70,7 +72,8 @@ Before using any SurveyCTO MCP tool, read [`references/mcp.md`](references/mcp.m
 1. **Before any MCP tool call**: read [`references/mcp.md`](references/mcp.md), then call `get_surveycto_mcp_capabilities` when unsure to learn the current tool list and primer topics. If the work involves XLSForms, you must also have read [`references/xlsform.md`](references/xlsform.md) first — see [Prerequisite: read the XLSForm reference](#prerequisite-read-the-xlsform-reference).
 2. **Factual SurveyCTO questions**: `kb_search` → quote the returned URLs in your answer.
 3. **Create a new XLSForm**: follow the [Workflow: create a new form](#workflow-create-a-new-form) below — it is the canonical sequence and enforces the template-first rule.
-4. **Inspect or edit an existing XLSForm**:
+4. **Add, update, or verify form-label translations**: see [Workflow: translate form labels](#workflow-translate-form-labels) below, which points to [`references/translation.md`](references/translation.md).
+5. **Inspect or edit an existing XLSForm**:
    1. Load the user's workbook (do not regenerate). `start_xlsform_session` for a fresh upload, or `get_xlsform_summary` if resuming an existing `session_id`.
    2. **Take a starting inventory from `form_summary` before patching or paging rows.** Note existing column names, choice lists (especially reusable ones like `yesno`), settings values, and any warnings. Do not assume spellings or values from memory.
    3. `xls_get_rows` / `xls_get_row` to inspect rows you intend to touch. Parallel calls are fine.
@@ -203,6 +206,8 @@ This section applies regardless of which file-tooling path you're using (SurveyC
 
 One known-recurring gotcha worth flagging up front, because general ODK memory consistently gets it wrong: in multi-language forms, the **default language goes in the unsuffixed column** (`label`, `hint`, `constraint message`, …) and additional languages go in suffixed columns (e.g., `label:Spanish`). Putting the default language in a suffixed column and leaving the base empty silently breaks the form. Other divergences are documented in [`references/xlsform.md`](references/xlsform.md); read it.
 
+For translation work specifically, see [Workflow: translate form labels](#workflow-translate-form-labels) and [`references/translation.md`](references/translation.md).
+
 ### CRITICAL: Always start from the template
 
 Every new XLSForm **must** start from the bundled template at [`assets/xlsform-template.xlsx`](assets/xlsform-template.xlsx).
@@ -237,7 +242,7 @@ Follow these steps in order:
 2. **Read [`references/xlsform.md`](references/xlsform.md) before designing any form content.** This is mandatory — not a lookup to do if confused later. Column conventions, multi-language structure, group/repeat rules, and expression syntax all have SurveyCTO-specific details that differ from general ODK knowledge. See [Prerequisite: read the XLSForm reference](#prerequisite-read-the-xlsform-reference).
 3. If MCP tools are available, read [`references/mcp.md`](references/mcp.md), then upload the copied file via `start_xlsform_session`. If MCP is unavailable, open the copied workbook directly with the best available spreadsheet/XLSX tooling.
 4. Read the starting structure fully before editing. With MCP, use the returned `form_summary`; without MCP, inspect the workbook sheets directly. Note next append location, exact column names already present, existing reusable choice lists, and current settings values.
-5. Apply related edits in one batch. With MCP, use a single `xls_apply_patches` call and `change_setting` for `form_id`, `form_title`, and `default_language`; without MCP, write directly into the copied workbook's existing worksheets.
+5. Apply related edits in one batch. With MCP, use a single `xls_apply_patches` call and `change_setting` for `form_id`, `form_title`, `default_language`, and/or `instance_name` (the only patch-addressable settings keys); without MCP, write directly into the copied workbook's existing worksheets.
 6. Export or save the result. With MCP, use `export_xlsform` and hand the `download_url` to the user. Remind the user to attach any required `.fieldplugin.zip` files in the SurveyCTO console at upload time.
 
 **Why the template is mandatory:** It contains conditional formatting rules, help worksheets, column headers, starter metadata fields, formula-based versioning, and pre-formatted rows that cannot be reliably recreated programmatically. Skipping the template produces files that are technically valid but painful for humans to edit in Excel.
@@ -248,6 +253,16 @@ The template provides:
 - **settings** worksheet with headers and an auto-updating `version` formula
 - **help-survey**, **help-choices**, **help-settings** worksheets with reference documentation
 - Conditional formatting rules that color-code rows by field type
+
+**Template starter content is a helpful starting point, not a fixed requirement.** The starter rows (metadata fields, `caseid`, audit calculations) and the `yesno` choice list are included as conveniences for common cases. Keep standard metadata and audit rows by default because they are generally useful and not user-facing clutter; remove or replace them only when the source form or user request gives you a reason. Treat `caseid` as context-dependent: keep it for case-management work, but delete it when it would confuse a non-case draft. The `yesno` choice list is just an example choice list — drop or replace it freely when the form uses a different yes/no convention or no row references it. What's worth preserving is the *tooling*: the auto-updating `version` formula, the conditional formatting, the help worksheets, and the column-header structure. When you change starter content (e.g., rewrite a choice's `value`), be consistent — also update everything that references it.
+
+#### Workflow: translate form labels
+
+Adding a language, updating translations after the source changes, or verifying existing translations is its own workflow. **Read [`references/translation.md`](references/translation.md) before starting** — don't improvise from the column-convention sketch in [`references/xlsform.md`](references/xlsform.md).
+
+#### Workflow: convert a form from another platform
+
+Converting a form definition exported from another data collection platform — KoboToolbox or ODK (XLSForm `.xlsx`), CommCare (XForms `.xml`), Qualtrics (`.qsf` JSON), or anything else — into a SurveyCTO XLSForm is its own workflow. Note that the conversion is **best-effort and agent-driven**, and the SurveyCTO MCP XLSForm tools work **only on SurveyCTO-shaped XLSForms** (do not point them at the source file). **Read [`references/form-conversion.md`](references/form-conversion.md) before starting**, then load the matching platform-specific reference (`form-conversion-qualtrics.md`, `form-conversion-kobo.md`, `form-conversion-odk.md`, `form-conversion-commcare.md`) if one exists for the source platform; for platforms without a dedicated reference, the base workflow still applies.
 
 ### Editing rules (apply to every path)
 
@@ -281,7 +296,7 @@ The template provides:
 - **Add skip logic**: write the expression into the `relevance` column on the target row.
 - **Add a constraint**: write the expression into `constraint` (use `.` for current value); write a user-facing message into `constraint message`.
 - **Add a calculation**: row with `type=calculate`, unique `name`, expression in `calculation`.
-- **Update settings**: with MCP, use `change_setting` for `form_title`, `form_id`, and `default_language`. Without MCP, write those values into row 2 of `settings`. Leave `version` alone.
+- **Update settings**: with MCP, use `change_setting` for `form_title`, `form_id`, `default_language`, and/or `instance_name` (the only patch-addressable settings keys; other columns such as `public_key` and `submission_url` must be written by hand to a downloaded workbook). Without MCP, write those values into row 2 of `settings`. Leave `version` alone.
 
 ### Validation checklist
 
@@ -445,6 +460,12 @@ In the dataset XML, add a `<dataLink>` with:
 | --- | --- |
 | [`references/overview.md`](references/overview.md) | First — orientation, file types, how they fit together |
 | [`references/xlsform.md`](references/xlsform.md) | **Mandatory before any XLSForm work** — column conventions, expressions, groups/repeats, multi-language |
+| [`references/translation.md`](references/translation.md) | Adding, updating, or verifying form-label translations — workflow, preserve-verbatim rules, glossary handling, self-review, back-translation spot check, verification checklist |
+| [`references/form-conversion.md`](references/form-conversion.md) | **Mandatory before any form conversion** — platform-agnostic workflow for converting form definitions from other data collection platforms into SurveyCTO XLSForms, including the universal mapping concerns, the conversion-report contract, and pointers to platform-specific references |
+| [`references/form-conversion-qualtrics.md`](references/form-conversion-qualtrics.md) | Converting a Qualtrics `.qsf` JSON export — `.qsf` anatomy, question-type / selector mapping, display-logic translation, flow/branch handling, gotchas |
+| [`references/form-conversion-kobo.md`](references/form-conversion-kobo.md) | Converting a KoboToolbox XLSForm `.xlsx` — expression rewrites, Kobo-specific extensions (`kobo--matrix`, `kobo--score`, `kobo--rank`), settings differences |
+| [`references/form-conversion-odk.md`](references/form-conversion-odk.md) | Converting an ODK XLSForm `.xlsx` — expression rewrites, column-name normalization (`relevant`→`relevance`), field-type and settings differences |
+| [`references/form-conversion-commcare.md`](references/form-conversion-commcare.md) | Converting a CommCare XForms `.xml` export — XForms anatomy, parsing helper, itext → `label:Lang`, case-management caveats |
 | [`references/expressions.md`](references/expressions.md) | Any expression work (relevance, constraint, calculation, choice_filter) |
 | [`references/datasets-xml.md`](references/datasets-xml.md) | Server dataset XML definitions |
 | [`references/data-explorer.md`](references/data-explorer.md) | Data Explorer dashboards |
