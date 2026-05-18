@@ -137,7 +137,7 @@ A small Kobo form snippet with a matrix question and its SurveyCTO equivalent.
 | `select_one likert5` | `social` | `Social connections` | `Conexiones sociales` | `likert` |
 | `end group` | `wellbeing` | | | |
 
-**Target SurveyCTO `choices` rows** (note column rename `name` → `value` is **not** needed — both ODK/Kobo and SurveyCTO use `name` or `value` interchangeably in many dialects; check the exact column name in the source, but `name` is acceptable in SurveyCTO `choices`; standard SurveyCTO uses `value` per [`xlsform.md`](xlsform.md), so rename to `value` for consistency):
+**Target SurveyCTO `choices` rows** (note column rename `name` → `value` is not strictly necessary since SurveyCTO and the MCP server accept either, but you can rename to `value` for consistency):
 
 | list_name | value | label | label:Spanish |
 | --- | --- | --- | --- |

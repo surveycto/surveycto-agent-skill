@@ -150,11 +150,14 @@ def _split_instances(model: ET.Element, warnings: list[str]) -> tuple[ET.Element
 def _form_id_from_instance(primary_instance: ET.Element, warnings: list[str]) -> str:
     """Pull a form_id from the primary instance root element.
 
-    CommCare's primary instance typically has a single child element whose
-    tag is the form identifier and whose ``xmlns`` is the form xmlns. We
-    return that element's local tag name. The actual form xmlns (a URL)
-    is more globally unique but rarely what a user wants as a SurveyCTO
-    form_id.
+    CommCare's primary instance has a single child element whose ``xmlns``
+    is the form xmlns. We try, in order: the element's ``id`` attribute,
+    its ``name`` attribute, and finally its local tag name. Vellum-exported
+    forms typically carry a human-readable ``name`` (e.g. ``"Buy Candy
+    Corn"``), so that's what callers usually see — they will generally
+    want to slugify or rename before using it as a SurveyCTO ``form_id``.
+    The form xmlns itself (a URL) is more globally unique but rarely what
+    a user wants as a SurveyCTO form_id.
     """
     children = list(primary_instance)
     if not children:
@@ -278,15 +281,21 @@ def _parse_case_actions(model: ET.Element) -> list[dict[str, Any]]:
     conversion report. We just collect the raw shapes here.
     """
     actions: list[dict[str, Any]] = []
+    seen: set[int] = set()
     for inst in model.findall(_q("xf:instance")):
         case_el = inst.find(f".//{{{NS['orx']}}}case") or inst.find(".//{http://commcarehq.org/case/transaction/v2}case")
-        if case_el is not None:
+        if case_el is not None and id(case_el) not in seen:
+            seen.add(id(case_el))
             actions.append({"location": "instance", "raw": ET.tostring(case_el, encoding="unicode")})
-    # CommCare-specific xmlns for case actions varies by form version.
+    # CommCare-specific xmlns for case actions varies by form version. The
+    # model-wide scan can re-find <case> blocks already collected above
+    # (they live inside <xf:instance>, which lives inside <model>), so we
+    # dedupe by element identity before appending.
     for cc_ns in ("http://commcarehq.org/case/transaction/v2",):
         for action in model.findall(f".//{{{cc_ns}}}*"):
             tag = _strip_ns(action.tag)
-            if tag in ("create", "update", "close", "case"):
+            if tag in ("create", "update", "close", "case") and id(action) not in seen:
+                seen.add(id(action))
                 actions.append({"location": "model", "action": tag, "raw": ET.tostring(action, encoding="unicode")})
     return actions
 
@@ -429,13 +438,14 @@ def _build_control(
     name = _leaf_name(ref)
     labels = _resolve_label(el, itext_map, languages)
     hints = _resolve_hint(el, itext_map, languages)
-    media = _resolve_media(el, itext_map, languages)
-    constraint_msg = _resolve_message(el, itext_map, languages, jr_attr=bind.get("constraintMsg", ""))
-    required_msg = _resolve_message(el, itext_map, languages, jr_attr=bind.get("requiredMsg", ""))
+    media = _resolve_media(el, itext_map)
+    constraint_msg = _resolve_message(itext_map, languages, jr_attr=bind.get("constraintMsg", ""))
+    required_msg = _resolve_message(itext_map, languages, jr_attr=bind.get("requiredMsg", ""))
     choices = None
+    itemset = None
     upload_mediatype = None
     if tag in ("select", "select1"):
-        choices = _parse_choices(el, itext_map, languages)
+        choices, itemset = _parse_choices(el, itext_map, languages)
     if tag == "upload":
         upload_mediatype = el.get("mediatype")
 
@@ -457,6 +467,7 @@ def _build_control(
         "readonly": bind.get("readonly", "") in ("true()", "true", "yes"),
         "default_from_instance": None,  # CommCare defaults usually live in the primary instance; resolve if needed.
         "choices": choices,
+        "itemset": itemset,
         "upload_mediatype": upload_mediatype,
         "preload": bind.get("preload"),
         "preload_params": bind.get("preloadParams"),
@@ -468,18 +479,25 @@ def _parse_choices(
     el: ET.Element,
     itext_map: dict[str, dict[str, dict[str, str]]],
     languages: list[str],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Return (choices, itemset_xml).
+
+    ``choices`` is a homogeneous list of ``{"value", "labels"}`` dicts built
+    from inline ``<item>`` elements. ``itemset_xml`` is the raw XML of an
+    inline ``<itemset>`` (less common in CommCare) if present, so the agent
+    can translate it into a SurveyCTO external-data lookup separately;
+    otherwise ``None``. Keeping the two cleanly separated avoids forcing
+    callers to handle heterogeneous shapes in ``choices``.
+    """
     choices: list[dict[str, Any]] = []
     for item in el.findall(_q("xf:item")):
         value_el = item.find(_q("xf:value"))
         value = (value_el.text or "").strip() if value_el is not None else ""
         labels = _resolve_label(item, itext_map, languages)
         choices.append({"value": value, "labels": labels})
-    # Inline itemset (less common in CommCare) — record for the agent to handle.
-    itemset = el.find(_q("xf:itemset"))
-    if itemset is not None:
-        choices.append({"_itemset": ET.tostring(itemset, encoding="unicode")})
-    return choices
+    itemset_el = el.find(_q("xf:itemset"))
+    itemset_xml = ET.tostring(itemset_el, encoding="unicode") if itemset_el is not None else None
+    return choices, itemset_xml
 
 
 # --- label / hint / media resolution --------------------------------------
@@ -539,7 +557,6 @@ def _resolve_text_element(
 def _resolve_media(
     el: ET.Element,
     itext_map: dict[str, dict[str, dict[str, str]]],
-    languages: list[str],
 ) -> dict[str, dict[str, str]]:
     """Return ``{form: {lang: jr_uri}}`` for image/audio/video/markdown forms attached via itext."""
     label_el = el.find(_q("xf:label"))
@@ -559,7 +576,6 @@ def _resolve_media(
 
 
 def _resolve_message(
-    el: ET.Element,
     itext_map: dict[str, dict[str, dict[str, str]]],
     languages: list[str],
     jr_attr: str,

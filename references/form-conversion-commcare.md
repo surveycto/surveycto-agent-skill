@@ -94,7 +94,7 @@ The helper returns a dict with:
 | Key | Shape | Notes |
 | --- | --- | --- |
 | `form_title` | `str` | From `<h:title>`. |
-| `form_id` | `str` | The primary instance root tag's local name. Often a Vellum-generated slug. Confirm with the user before using as `form_id` in SurveyCTO — they may want to rename. |
+| `form_id` | `str` | Picked from the primary instance root element, in this precedence: the `id` attribute, then the `name` attribute, then the element's local tag name. In practice Vellum-exported forms usually carry a human-readable `name` (e.g. `"Buy Candy Corn"`, `"New Form"`), so that's what you'll typically get — not a slug. Confirm with the user before using as `form_id` in SurveyCTO and slugify as needed (SurveyCTO `form_id` should be a safe identifier). |
 | `languages` | `list[str]` | Language codes from `<itext>` translations, in document order. First is the default. |
 | `default_language` | `str` | First language listed; use as `default_language` in `settings`. |
 | `questions` | `list[dict]` | One dict per UI control, group/repeat marker, and end marker, in document order. See below. |
@@ -121,7 +121,8 @@ Each question dict carries:
 | `readonly` | `bool` — from the bind's `readonly` attribute. Set on questions and on `begin_group` / `begin_repeat` markers. |
 | `repeat_count` | For `begin_repeat` markers only: the `jr:count` expression (an XPath like `/data/hh_size`) if present. Apply the same expression rewrites and emit into the SurveyCTO `repeat_count` column. |
 | `no_add_remove` | For `begin_repeat` markers only: bool from `jr:noAddRemove`. When `true`, the user cannot dynamically add/remove instances — equivalent to providing `repeat_count` (and is sometimes used together). |
-| `choices` | For `select` / `select1`: list of `{value, labels: {lang: text}}`. |
+| `choices` | For `select` / `select1`: list of `{value, labels: {lang: text}}`. Always homogeneous — if the source uses an inline `<itemset>` instead of inline `<item>`s, the choices list will be empty and `itemset` (below) carries the raw XML. |
+| `itemset` | For `select` / `select1`: raw `<itemset>` XML string if the source defines choices via an itemset (rare in CommCare; typical of `jr://fixture/...` lookups). Otherwise `None`. Translate to a SurveyCTO external-data lookup per [§ Secondary instances](#secondary-instances-external-lookups). |
 | `upload_mediatype` | For `upload`: `image`, `audio`, or `video`. |
 | `preload` / `preload_params` | For metadata fields (`jr:preload="property"` etc.) — map to SurveyCTO metadata types per the table below. |
 | `parent_path` | List of ancestor group/repeat names — context for nesting. Empty for top-level questions. |
@@ -320,7 +321,7 @@ Anything in the `vellum:` namespace is Vellum form-builder metadata — labels, 
 - **Nested groups and repeats.** CommCare nests groups arbitrarily deep, and repeats can contain groups (and vice versa). The helper preserves nesting via the begin/end markers and `parent_path`; emit the markers in order and the structure carries over. Watch for group-level `relevant` on the `begin_group` marker — emitting it on the marker row applies the relevance to every field inside, matching CommCare's behavior. Don't re-emit the same relevance on every field inside the group.
 - **`jr:itext('id')` resolution.** Labels and hints are nearly always indirect via itext. The helper resolves them for you; if you ever read the XML directly, remember to look up the itext entry rather than treating the `ref` attribute as the label text.
 - **The case database is invisible from the XForms.** `instance('casedb')` doesn't carry data inside the XML — at runtime CommCare populates it from the case server. The XForms only declares the reference. Don't try to read case data from the XML; that data lives elsewhere.
-- **Form xmlns vs form ID.** The primary instance's `xmlns` attribute is a URL (often a `http://openrosa.org/...` or `http://commcarehq.org/...` URL). It's globally unique but rarely what the user wants as a SurveyCTO `form_id`. Use the primary instance root element's local tag name (`<data id="...">` — the `id` attribute is often a better candidate), or just ask the user.
+- **Form xmlns vs form ID.** The primary instance's `xmlns` attribute is a URL (often a `http://openrosa.org/...` or `http://commcarehq.org/...` URL). It's globally unique but rarely what the user wants as a SurveyCTO `form_id`. The helper picks the primary instance root element's `id` attribute, falling back to `name`, then to the local tag name — Vellum exports usually surface as the human-readable `name`. Slugify before emitting, or ask the user.
 - **Vellum question IDs** are stored as XForms `nodeset` leaf names, which are usually already XLSForm-safe. But Vellum allows characters XLSForm doesn't (hyphens, leading digits in some older forms); apply the safe-name rule per [`form-conversion.md`](form-conversion.md#field-name-sanitization).
 - **`<output>` substitutions inside labels** are common in CommCare. The helper flattens them to `${field}` in the returned label text, but the field referenced might be deep inside a group (`/data/group1/age` → `${age}`) — verify the leaf-name approach doesn't collide. If collision, the conversion will fail the safe-name uniqueness check; disambiguate.
 - **`acknowledge` rendering.** CommCare's `<trigger>` (and SurveyCTO's `acknowledge`) renders as a tap-to-continue confirmation. Identical semantics; carry over.
