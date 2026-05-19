@@ -130,6 +130,28 @@ If you add a new top-level path that *should* ship in the skill, update
 both `.github/workflows/release.yml` and `.github/workflows/build-dev.yml`
 (and the local command above) to include it.
 
+## When editing XLSX assets
+
+The XLSForm template and any other public `.xlsx` assets may be edited in
+Excel, but Excel can add machine-local metadata to the zip package (for
+example `docProps/core.xml` author fields and `x15ac:absPath` absolute
+local paths in `xl/workbook.xml`). After every edit to
+`assets/xlsform-template.xlsx` or another public XLSX asset, run the
+sanitizer and validator before committing:
+
+```bash
+python3 scripts/sanitize_xlsx_assets.py
+python3 tests/validate_xlsx_assets.py
+```
+
+The sanitizer is stdlib-only and removes local author/path metadata. The
+validator uses `openpyxl` and checks both metadata hygiene and the
+template invariants that Excel can silently break: exact sheet structure,
+expected `survey` / `choices` / `settings` headers, survey conditional
+formatting coverage across all headered columns, and the `settings!C2`
+version formula. CI installs `openpyxl==3.1.5` and runs the same
+validator before building the dev or release zip.
+
 ## Repo layout
 
 | Path | Purpose |
@@ -143,6 +165,7 @@ both `.github/workflows/release.yml` and `.github/workflows/build-dev.yml`
 | `LICENSE` | Apache-2.0. **Excluded from the skill zip** (it's at the repo level, not the bundle level). |
 | `.kilo/` | Per-project Kilo config, plans, command/agent overrides. **Excluded from the skill zip.** |
 | `planning/` | Internal planning notes. **Excluded from the skill zip.** |
+| `scripts/` | Repo maintenance scripts, including XLSX asset sanitization. **Excluded from the skill zip.** |
 | `tests/` | Test fixtures and validation assets. **Excluded from the skill zip.** |
 
 ## Quality bar
@@ -172,6 +195,9 @@ both `.github/workflows/release.yml` and `.github/workflows/build-dev.yml`
 - **Editing the field plug-in test harness or template** — keep the
   harness zero-dependency and offline-usable. Run `validate.mjs`
   against `assets/field-plugin-template/` after any change.
+- **Editing `assets/xlsform-template.xlsx` or another public XLSX asset** —
+  run `python3 scripts/sanitize_xlsx_assets.py`, then
+  `python3 tests/validate_xlsx_assets.py` before committing.
 - **Updating MCP server reference (`references/mcp.md`)** — this is
   derived from the private `scto-assistant-be` repo, not from public
   docs. See [`README.md` → Maintaining the MCP server reference](README.md#maintaining-the-mcp-server-reference).
