@@ -5,6 +5,10 @@
 surveycto-skill.zip
 surveycto-skill-dev.zip
 
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+
 # Editor files
 *.swp
 *.swo

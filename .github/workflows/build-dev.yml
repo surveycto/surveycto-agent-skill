@@ -10,10 +10,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install validation dependencies
+        run: python3 -m pip install openpyxl==3.1.5
+
+      - name: Validate XLSX assets
+        run: python3 tests/validate_xlsx_assets.py
+
       - name: Build zip
         run: |
           zip -r surveycto-skill-dev.zip SKILL.md references assets \
-            -x '**/.DS_Store' -x '**/Thumbs.db'
+            -x '**/.DS_Store' -x '**/Thumbs.db' \
+            -x '**/__pycache__/*' -x '**/*.pyc' -x '**/*.pyo'
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

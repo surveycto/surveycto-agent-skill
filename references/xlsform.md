@@ -255,8 +255,8 @@ Put settings in row 2.
 | `version` | Form definition version number. | Increase on every spreadsheet-definition update. It must be a single whole number whose digit count stays fixed across versions. SurveyCTO templates use an auto-incrementing timestamp formula. |
 | `public_key` | Public encryption key for end-to-end encrypted forms. | Add the public key to encrypt submissions. Encryption settings cannot be changed for an existing `form_id`; use a new `form_id` to change encryption status/key. |
 | `submission_url` | Submission URL for encrypted forms. | Included in SurveyCTO templates/help for encryption workflows. Keep aligned with the generated encrypted-form settings. |
-| `default_language` | Name of the base/default language. | New forms default to `english`; set this when base `label`, `hint`, `image`, and message columns are in another language. |
-| `instance_name` | Dynamic name for filled-in form instances. | Add the column manually; row 2 is an expression that evaluates to a string, such as `concat('HH SURVEY - ', ${hhid})`. |
+| `default_language` | Name of the base/default language. | New forms default to `english`; set this when base `label`, `hint`, `image`, and message columns are in another language. For workflow guidance on *translating* labels (adding a language, updating after source changes, verifying existing translations), see [`translation.md`](translation.md). |
+| `instance_name` | Dynamic name for filled-in form instances. | Row 2 is an expression that evaluates to a string, such as `concat('HH SURVEY - ', ${hhid})`. With MCP, set it via `change_setting` (it is one of the patch-addressable keys); without MCP, add the column manually and write the expression into row 2. See [Naming forms](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/05.naming-forms.html). |
 
 ## `pulldata()`, `search()`, And Attached Data
 
@@ -297,6 +297,8 @@ The skill ships with [`assets/xlsform-template.xlsx`](../assets/xlsform-template
 | `choices` | Standard headers `list_name`, `value`, `label`, `image`, `filter`, plus a default `yesno` list. | Provides a safe first choice-list pattern and the cascade `filter` convention. |
 | `settings` | `form_title`, `form_id`, `version`, `public_key`, `submission_url`, `default_language`, with an auto-incrementing version formula and `default_language=english`. | Avoids missing required form metadata and handles versioning correctly during iteration. |
 | `help-survey`, `help-choices`, `help-settings` | Human-readable column help, translation column examples, links to relevant docs, and SurveyCTO-specific columns like `publishable`, `minimum_seconds`, `note`, and `response_note`. | SurveyCTO ignores extra help worksheets, but they preserve institutional knowledge and reduce column-name mistakes. |
+
+**Template starter content is a helpful starting point, not a fixed requirement.** The starter rows (default metadata fields, `caseid`, hidden audit calculations) and the `yesno` choice list are conveniences for common cases, not infrastructure SurveyCTO depends on. Keep the standard metadata and audit rows by default because they are generally useful and not user-facing clutter; remove or replace them only when the source form or user request gives you a reason. Treat `caseid` as context-dependent: keep it for case-management work, but delete it when it would confuse a non-case draft. The `yesno` choice list is just an example choice list — drop or replace it freely when the form uses a different yes/no convention or no row references it. What's worth preserving across every edit is the *tooling*: the auto-updating `version` formula, the conditional formatting, the help worksheets, and the column-header structure. When you change starter content (e.g., rewrite a choice's `value`), be consistent — also update everything that references it, or you'll create silent breakage.
 
 What breaks when building from scratch:
 

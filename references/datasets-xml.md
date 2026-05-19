@@ -111,6 +111,11 @@ For `CONCATENATE_TO_TEXT`, set `updateLogicOptions`:
 Repeated fields use `*` suffix in field map entries:
 - `"formField": "field*"` maps to `"datasetField": "column*"` (wide format)
 
+### fieldMap gotchas
+
+- **`select_multiple` fields publish the field name directly.** SurveyCTO already stores `select_multiple` submission values as a space-separated string; do *not* invent a pre-joined helper field (e.g. `species_joined`) and point `formField` at it. Use the real `select_multiple` field name.
+- **Every name in `fieldMap` must really exist in the form.** The publishing engine maps by literal field name; there is no form-side pre-processing layer. Verify each `formField` against the form's actual `survey` rows before uploading the dataset definition.
+
 ## Common modifications
 
 | Task | What to change |

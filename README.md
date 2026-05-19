@@ -181,13 +181,36 @@ the skill bundle:
 ```bash
 rm -f surveycto-skill.zip
 zip -r surveycto-skill.zip SKILL.md references assets \
-  -x '**/.DS_Store' -x '**/Thumbs.db'
+  -x '**/.DS_Store' -x '**/Thumbs.db' \
+  -x '**/__pycache__/*' -x '**/*.pyc' -x '**/*.pyo'
 ```
 
 The skill bundle is exactly `SKILL.md` + `references/` + `assets/`;
 everything else in the repo (this README, `LICENSE`, `AGENTS.md`,
-`.github/`, `.kilo/`, `planning/`, etc.) is repo tooling and stays
+`.github/`, `.kilo/`, `planning/`, `scripts/`, `tests/`, etc.) is repo tooling and stays
 out of the zip by virtue of not being included.
+
+### Maintaining XLSX assets
+
+The bundled XLSForm template is edited in Excel, but Excel may write
+machine-local package metadata into the `.xlsx` archive, including the
+last editor's name and an absolute local filesystem path. After any edit
+to `assets/xlsform-template.xlsx` or another public XLSX asset, run:
+
+```bash
+python3 scripts/sanitize_xlsx_assets.py
+python3 tests/validate_xlsx_assets.py
+```
+
+The sanitizer rewrites workbook package metadata to remove local author
+and path leaks. The validator checks for those leaks and also asserts the
+XLSForm template invariants that are easy for an Excel round-trip to
+silently damage: sheet structure, `survey` / `choices` / `settings`
+headers, survey conditional-formatting coverage, and the `settings!C2`
+version formula.
+
+The validation script requires `openpyxl`; CI installs the pinned version
+with `python3 -m pip install openpyxl==3.1.5` before running it.
 
 ### Making changes
 
