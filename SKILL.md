@@ -18,12 +18,12 @@ description: >
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
-  version: "1.0.0-beta.4"
+  version: "1.0.0-beta.5"
 ---
 
 # SurveyCTO Form, Plug-in, and Dataset Authoring
 
-**Skill version: 1.0.0-beta.4.** If a SurveyCTO MCP tool response includes a required or preferred version suggested for this skill, pass that along to the user.
+**Skill version: 1.0.0-beta.5.** If a SurveyCTO MCP tool response includes a required or preferred version suggested for this skill, pass that along to the user.
 
 SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
@@ -338,6 +338,7 @@ Dataset definitions are XML files with a `<dataset>` root element. They define c
 - Element names are **case-sensitive** (e.g., `otherUserCode`, not `otherUsercode`).
 - Forms in `<formLinks>` and `<dataLinks>` must be deployed before uploading the definition.
 - `<showColumnsWhenTable>` contains multiple `<columnNames>` child elements, not a comma-separated string.
+- Case-management and enumerator datasets have standard column sets the console always creates: ENUMERATORS `id,name,users`, CASES `id,label,formids,users,roles,sortby,enumerators`. Reproduce these by default and append any extra requested columns after them (a requested `region` on an enumerator dataset gives `id,name,users,region`). For a new ENUMERATORS dataset, `<idFormatOptions>` is required and its values should come from the user, not be invented. See [`references/datasets-xml.md`](references/datasets-xml.md) → *Base columns by dataset type*.
 
 **Full reference**: [`references/datasets-xml.md`](references/datasets-xml.md).
 
