@@ -110,7 +110,7 @@ This is the right pattern for: per-form lookup data, static reference tables, on
 
 For data that should live on the server (shared across forms, updated independently, populated by other forms, or used to drive dynamic `select_*` choice lists):
 
-1. **Author a server dataset definition** for the CSV / GeoJSON / XML data. Read [`datasets-xml.md`](datasets-xml.md) for the XML schema, dataset types (`SERVER` vs `CLIENT` vs `REPORT`), `<fieldNames>`, `<uniqueRecordField>`, `<formLinks>`, and `<dataLinks>`. Choose `CLIENT` if the data is read-only lookup; choose `SERVER` if the user will publish into it from other forms.
+1. **Author a server dataset definition** for the CSV / GeoJSON / XML data. Read [`datasets-xml.md`](datasets-xml.md) for the XML schema, `<fieldNames>`, `<uniqueRecordField>`, `<formLinks>`, and `<dataLinks>`. Always set `datasetType` to `SERVER`. For a read-only lookup, give it `<formLinks>` to the consuming form so it pre-loads; add `<dataLinks>` only when a form publishes into it.
 2. **In the converted XLSForm**, choose one of:
    - **Static-select against a SurveyCTO dataset**: `select_one <list>` where the choices in the `choices` worksheet have `value` and `label` referring to dataset columns, and the field has `appearance=search('<dataset_id>')`. See the [Dynamic select list from pre-loaded data](../SKILL.md#dynamic-select-list-from-pre-loaded-data) pattern in `SKILL.md`. This replaces ODK's `select_one_from_file`.
    - **`pulldata()` against the dataset**: `pulldata('<dataset_id>', '<column>', '<lookup_column>', ${field})`. Functionally identical to CSV `pulldata()`; just point at the dataset ID instead of a filename.
@@ -177,7 +177,7 @@ ODK Central supports **Entity Lists** — a data-management feature where form s
 The conversion:
 
 1. **Drop the `entities` worksheet entirely** from the output XLSForm. SurveyCTO doesn't recognize it, and the dataset replaces it.
-2. **Author the matching SurveyCTO dataset XML** for each Entity List, following [`datasets-xml.md`](datasets-xml.md). For an Entity List that's read-only in this form, a `CLIENT` dataset is usually right; for one that this form creates/updates, a `SERVER` dataset with `<dataLinks>` is right.
+2. **Author the matching SurveyCTO dataset XML** for each Entity List, following [`datasets-xml.md`](datasets-xml.md). Always use a `SERVER` dataset: for an Entity List that's read-only in this form, give it `<formLinks>` so it pre-loads; for one that this form creates/updates, add `<dataLinks>`.
 3. **Translate `entities` `save_to` mappings** (which ODK uses to mark form fields that write into the entity list on submission) into `<dataLink>` field mappings in the dataset XML (`FORM` class, `INCOMING` type, mapping form-field names to dataset-column names).
 4. **Translate references to the entity list** (typically `select_one <entity_list_name>`) into `select_one <list>` rows in the converted form, with `appearance=search('<dataset_id>')` for dynamic loading. The `choices` worksheet gets one row per dataset where `value` and `label` reference dataset column names.
 5. **Coach the user through the dataset upload steps** in the handoff message and the conversion report — see [§ External data: CSVs and datasets](#external-data-csvs-and-datasets) for the concrete instruction list.

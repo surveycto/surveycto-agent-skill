@@ -27,7 +27,7 @@ Forms referenced in `<formLinks>` or `<dataLinks>` must be deployed before uploa
   <definition>
     <id>dataset_id</id>                    <!-- Required: used in pulldata()/search() -->
     <title>Display Name</title>             <!-- Required -->
-    <datasetType>SERVER</datasetType>       <!-- Required: SERVER, CLIENT, or REPORT -->
+    <datasetType>SERVER</datasetType>       <!-- Required: always SERVER (see Dataset types) -->
     <fieldNames>col1,col2,col3</fieldNames> <!-- Optional: column order/names -->
 
     <formLinks>                             <!-- Optional: forms that attach/pre-load this dataset -->
@@ -202,11 +202,15 @@ The server enforces these structural rules; the field selection must satisfy the
 
 ## Dataset types
 
-| Type | Description |
-| --- | --- |
-| `SERVER` | Server-only dataset (not pre-loaded to devices) |
-| `CLIENT` | Pre-loaded to devices for offline use (via `pulldata()` or `search()`) |
-| `REPORT` | Reporting/export dataset |
+**Always emit `<datasetType>SERVER</datasetType>`.** SERVER is the only type you author or edit, including read-only lookup tables consumed by `pulldata()` and `search()`. Whether a dataset pre-loads onto devices for offline use is controlled by its `<formLinks>` (the forms that attach it) together with its discriminator, not by the dataset type. To make a lookup available offline, give it `<formLinks>` to the consuming form(s) and leave the type as SERVER.
+
+The other two values are legacy or system-managed. Never generate them; recognize them only if you open an existing definition.
+
+| Type | Status | Notes |
+| --- | --- | --- |
+| `SERVER` | **Use this** | The only type to author or edit. Pre-loading is driven by `<formLinks>` plus the discriminator. |
+| `CLIENT` | Legacy, do not emit | Old pre-loaded-lookup type. The server can no longer attach a CLIENT dataset to a form, so it cannot pre-load. Replace with a SERVER dataset plus `<formLinks>`. |
+| `REPORT` | System-managed, do not emit | Auto-generated quality-check warning datasets (titled `<dataset> - QC warnings`). Uploading a REPORT definition is rejected by the server. Leave any you encounter untouched. |
 
 ## Discriminator values
 

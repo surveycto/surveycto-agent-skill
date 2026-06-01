@@ -18,12 +18,12 @@ description: >
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
-  version: "1.0.0-beta.4"
+  version: "1.0.0-beta.5"
 ---
 
 # SurveyCTO Form, Plug-in, and Dataset Authoring
 
-**Skill version: 1.0.0-beta.4.** If a SurveyCTO MCP tool response includes a required or preferred version suggested for this skill, pass that along to the user.
+**Skill version: 1.0.0-beta.5.** If a SurveyCTO MCP tool response includes a required or preferred version suggested for this skill, pass that along to the user.
 
 SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
@@ -326,7 +326,7 @@ Dataset definitions are XML files with a `<dataset>` root element. They define c
 | --- | --- |
 | `<id>` | Dataset ID used in `pulldata()` and `search()` calls |
 | `<title>` | Display name |
-| `<datasetType>` | `SERVER`, `CLIENT`, or `REPORT` |
+| `<datasetType>` | Always `SERVER` (legacy `CLIENT`/`REPORT` are never authored; see full reference) |
 | `<fieldNames>` | Comma-separated column names/order |
 | `<formLinks>` | Forms that attach this dataset for pre-loading |
 | `<dataLinks>` | Publishing rules (incoming from forms, outgoing to files) |
@@ -399,13 +399,13 @@ Filter choices in one field based on the selection in another:
 
 ### Pre-loaded data lookup with `pulldata()`
 
-1. Create a `CLIENT` dataset with the lookup data.
-2. Attach it to the form via `<formLinks>` in the dataset definition.
+1. Create a `SERVER` dataset with the lookup data.
+2. Attach it to the form via `<formLinks>` in the dataset definition (this is what pre-loads it onto devices).
 3. Use `pulldata('dataset_id', 'column_to_return', 'lookup_column', ${key_field})` in a `calculation`.
 
 ### Dynamic select list from pre-loaded data
 
-1. Create a `CLIENT` dataset and attach it to the form.
+1. Create a `SERVER` dataset and attach it to the form via `<formLinks>`.
 2. In `survey`, set `type` to `select_one listname` and `appearance` to `search('dataset_id')` (or a more specific search expression).
 3. In `choices`, add one row for `listname` where `value` and `label` contain column names from the dataset (not literal values).
 
