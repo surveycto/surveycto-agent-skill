@@ -62,10 +62,10 @@ The correct fix is almost always to unblock MCP egress, not work around it. Stee
 
 | Tool | When to use |
 | --- | --- |
-| `get_surveycto_mcp_capabilities` | First call when unsure. Returns the canonical tool list, recommended workflows, available primer topics, server version, recalc availability, and the concurrency contract. |
+| `get_surveycto_mcp_capabilities` | First call when unsure. Returns the canonical tool list, recommended workflows, available primer topics, server version, recalc availability, the concurrency contract, and the skill-version policy under `intended_skill.versions` (`latest_version`, `recommended_min_version`, `deprecated_below_version`) plus `intended_skill.latest_updates`. See *Skill version self-check* below. |
 | `kb_search(query, top_k=5)` | Any factual SurveyCTO question. Searches `www.surveycto.com`, `docs.surveycto.com`, `support.surveycto.com`. Returns `{title, url, excerpt}` hits. `top_k` capped at 20. **Quote source URLs in answers.** |
 | `get_surveycto_primer(topic)` | Available primers at server-side: `overview`, `xlsform`, `expressions` (full set in the discovery payload's `available_primer_topics`). Mostly useful for callers without the skill installed; you already have these locally. |
-| `start_xlsform_session(xlsx_base64?, original_filename?)` | Caller wants to inspect or edit an XLSForm. **Always use the upload URL flow** — omit `xlsx_base64`; the server returns a short-lived `upload_url` and `curl_example`, and you upload with `curl -F file=@form.xlsx '<upload_url>'`. The upload response returns `session_id`, `expires_at`, `current_version`, `size_bytes`, `original_filename`, `form_summary`, `warnings`, `recommended_next_actions`. **Do not use inline `xlsx_base64` for real workbooks** — the bytes have to go through model context in both directions, and even the 154 KB bundled template (~205 KB base64, ~195K tokens) exceeds typical agent read/parameter limits. **Use the returned `form_summary` for orientation before paging rows.** |
+| `start_xlsform_session(xlsx_base64?, original_filename?)` | Caller wants to inspect or edit an XLSForm. **Always use the upload URL flow** — omit `xlsx_base64`; the server returns a short-lived `upload_url` and `curl_example`, and you upload with `curl -F file=@form.xlsx '<upload_url>'`. The upload response returns `session_id`, `expires_at`, `current_version`, `size_bytes`, `original_filename`, `form_summary`, `warnings`, `recommended_next_actions`, and a `skill_advisory` (see *Skill version self-check* below). **Do not use inline `xlsx_base64` for real workbooks** — the bytes have to go through model context in both directions, and even the 154 KB bundled template (~205 KB base64, ~195K tokens) exceeds typical agent read/parameter limits. **Use the returned `form_summary` for orientation before paging rows.** |
 | `get_xlsform_summary(session_id)` | Resuming an existing session (new agent context, after a long gap). Read-only and cheap. Returns the same `form_summary` shape plus `current_version` and `expires_at`. |
 | `xls_get_rows(session_id, sheet, where?, order_by?, start, limit, columns?, expand?, survey_row_kind?, …)` | Inspect rows. `limit` capped at 100; response includes `more_results: bool`. `survey_row_kind` is `"all"` (default) \| `"fields"` (skip group/repeat markers) \| `"groups"` (only begin group/repeat rows; end row auto-attached). Use `expand=["choices","deps_in","deps_out","expressions_refs","groups_enclosing","deps_in_closure","deps_out_closure"]` as needed. See *Filter AST and expand options* below for details. Read-only; safe to call in parallel. |
 | `xls_get_row(session_id, sheet, excel_row, columns?, expand?, …)` | Fetch one row by 1-based Excel row number (2 = first data row). Same expand options as `xls_get_rows`. For `begin group`/`begin repeat` rows, the response also includes `group_end_excel_row` and `group_end_row`. |
@@ -74,6 +74,21 @@ The correct fix is almost always to unblock MCP egress, not work around it. Stee
 | `end_xlsform_session(session_id)` | Optional explicit cleanup. Usually skip it and let the session expire by TTL so `download_url` / resource links remain usable for follow-up requests. Idempotent. |
 
 Resource: `xlsform://{session_id}/{version}` — read with `resources/read` for the recalculated bytes (or unchanged upload at version 1). `export_xlsform` also returns an HTTPS `download_url` tied to the session TTL; once the session expires, the server rejects the URL. Download it or hand it off before TTL expiry. MIME `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`.
+
+## Skill version self-check
+
+The server is the only channel that announces new skill releases, because skills do not auto-update. Two responses carry the policy:
+
+- `start_xlsform_session` → `skill_advisory` with `latest_version`, `recommended_min_version`, `deprecated_below_version`, `download_url`, and a `note`.
+- `get_surveycto_mcp_capabilities` → `intended_skill.versions` (same three version fields), `intended_skill.download_url`, and `intended_skill.latest_updates`.
+
+When you see either, compare this skill's own version (the **Skill version** stated at the top of `SKILL.md`, currently `1.0.0-beta.4`) against those values and act:
+
+1. **Below `deprecated_below_version`** → tell the user their installed SurveyCTO skill is deprecated and should be updated now, and give the `download_url`. Deprecated versions predate reliability fixes and may misbehave.
+2. **Below `recommended_min_version` (but not deprecated)** → mention that a newer skill version is available and offer to help update, with the `download_url`.
+3. **At or above `recommended_min_version`** → say nothing about versions.
+
+Compare with semantic-version ordering, never string ordering: pre-release identifiers mean `1.0.0-beta.10` is newer than `1.0.0-beta.9`, and any `1.0.0-beta.x` is older than `1.0.0`. Raise a version conclusion at most once per conversation; do not repeat it on every tool call.
 
 ## Filter AST and expand options
 
