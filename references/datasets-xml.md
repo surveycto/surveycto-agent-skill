@@ -145,7 +145,7 @@ The other two values are legacy or system-managed. Never generate them; recogniz
 | --- | --- | --- |
 | `SERVER` | **Use this** | The only type to author or edit. Pre-loading is driven by `<formLinks>` plus the discriminator. |
 | `CLIENT` | Legacy, do not emit | Old pre-loaded-lookup type. The server can no longer attach a CLIENT dataset to a form, so it cannot pre-load. Replace with a SERVER dataset plus `<formLinks>`. |
-| `REPORT` | System-managed, do not emit | Auto-generated quality-check warning datasets (titled "<dataset> - QC warnings"). Uploading a REPORT definition is rejected by the server. Leave any you encounter untouched. |
+| `REPORT` | System-managed, do not emit | Auto-generated quality-check warning datasets (titled `<dataset> - QC warnings`). Uploading a REPORT definition is rejected by the server. Leave any you encounter untouched. |
 
 ## Discriminator values
 
