@@ -18,12 +18,12 @@ description: >
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
-  version: "1.0.0-beta.4"
+  version: "1.0.0-beta.5"
 ---
 
 # SurveyCTO Form, Plug-in, and Dataset Authoring
 
-**Skill version: 1.0.0-beta.4.** SurveyCTO MCP tool responses publish the current skill-version policy: `start_xlsform_session` returns a `skill_advisory`, and `get_surveycto_mcp_capabilities` returns `intended_skill.versions`. When you see one, compare it against this skill's version above (semantic-version ordering, pre-release aware) and act: if this version is below the response's `deprecated_below_version`, warn the user that their installed SurveyCTO skill is deprecated and should be updated now from the response's `download_url`; if it is below `recommended_min_version`, mention a newer version is available and offer to help update. Say nothing about versions when this skill is current, and raise it at most once per conversation. Skills do not auto-update, so this is the only update signal users get. See [`references/mcp.md`](references/mcp.md) for the exact comparison rules.
+**Skill version: 1.0.0-beta.5.** SurveyCTO MCP tool responses publish the current skill-version policy: `start_xlsform_session` returns a `skill_advisory`, and `get_surveycto_mcp_capabilities` returns `intended_skill.versions`. When you see one, compare it against this skill's version above (semantic-version ordering, pre-release aware) and act: if this version is below the response's `deprecated_below_version`, warn the user that their installed SurveyCTO skill is deprecated and should be updated now from the response's `download_url`; if it is below `recommended_min_version`, mention a newer version is available and offer to help update. Say nothing about versions when this skill is current, and raise it at most once per conversation. Skills do not auto-update, so this is the only update signal users get. See [`references/mcp.md`](references/mcp.md) for the exact comparison rules.
 
 SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
@@ -326,7 +326,7 @@ Dataset definitions are XML files with a `<dataset>` root element. They define c
 | --- | --- |
 | `<id>` | Dataset ID used in `pulldata()` and `search()` calls |
 | `<title>` | Display name |
-| `<datasetType>` | `SERVER`, `CLIENT`, or `REPORT` |
+| `<datasetType>` | Always `SERVER` (legacy `CLIENT`/`REPORT` are never authored; see full reference) |
 | `<fieldNames>` | Comma-separated column names/order |
 | `<formLinks>` | Forms that attach this dataset for pre-loading |
 | `<dataLinks>` | Publishing rules (incoming from forms, outgoing to files) |
@@ -399,13 +399,13 @@ Filter choices in one field based on the selection in another:
 
 ### Pre-loaded data lookup with `pulldata()`
 
-1. Create a `CLIENT` dataset with the lookup data.
-2. Attach it to the form via `<formLinks>` in the dataset definition.
+1. Create a `SERVER` dataset with the lookup data.
+2. Attach it to the form via `<formLinks>` in the dataset definition (this is what pre-loads it onto devices).
 3. Use `pulldata('dataset_id', 'column_to_return', 'lookup_column', ${key_field})` in a `calculation`.
 
 ### Dynamic select list from pre-loaded data
 
-1. Create a `CLIENT` dataset and attach it to the form.
+1. Create a `SERVER` dataset and attach it to the form via `<formLinks>`.
 2. In `survey`, set `type` to `select_one listname` and `appearance` to `search('dataset_id')` (or a more specific search expression).
 3. In `choices`, add one row for `listname` where `value` and `label` contain column names from the dataset (not literal values).
 
