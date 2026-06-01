@@ -19,6 +19,9 @@ jobs:
       - name: Validate XLSX assets
         run: python3 tests/validate_xlsx_assets.py
 
+      - name: Validate doc examples
+        run: python3 tests/validate_doc_examples.py
+
       - name: Get version from SKILL.md
         id: version
         run: |

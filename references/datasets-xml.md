@@ -37,13 +37,13 @@ Forms referenced in `<formLinks>` or `<dataLinks>` must be deployed before uploa
     </formLinks>
 
     <dataLinks>                             <!-- Optional: data publishing rules -->
-      <dataLink>
+      <dataLink>                            <!-- Children MUST appear in the order below -->
         <dataLinkClass>FORM</dataLinkClass>         <!-- Required: FORM or SPREADSHEET -->
         <dataLinkType>INCOMING</dataLinkType>        <!-- Required: INCOMING or OUTGOING -->
         <dataLinkState>ENABLED</dataLinkState>       <!-- Optional: ENABLED or DISABLED -->
         <dataLinkFormat>0</dataLinkFormat>           <!-- Optional: 0=wide (default), 1=long -->
         <linkObjectId>form_id</linkObjectId>         <!-- Required: form or file ID -->
-        <fieldMap>JSON_MAPPING</fieldMap>             <!-- Optional: field-to-column mapping -->
+        <fieldMap>JSON_MAPPING</fieldMap>             <!-- Optional: field-to-column mapping. Must come BEFORE joiningField -->
         <joiningField>unique_id</joiningField>       <!-- Optional: unique ID for upserts -->
         <relevanceField>filter</relevanceField>      <!-- Optional: publish only when =1 -->
         <isAutoConfigured>false</isAutoConfigured>   <!-- Optional: default false -->
@@ -108,13 +108,77 @@ For `CONCATENATE_TO_TEXT`, set `updateLogicOptions`:
 
 ### Repeated fields
 
-Repeated fields use `*` suffix in field map entries:
-- `"formField": "field*"` maps to `"datasetField": "column*"` (wide format)
+Fields inside a repeat group use a `*` suffix on **both sides** of the field map entry:
+- `"formField": "field*"` maps to `"datasetField": "column*"`
+
+The `*` is required whether you publish in wide format or long format. What differs between the two formats is how those repeated fields land in the dataset; see [Long format publishing](#long-format-publishing).
 
 ### fieldMap gotchas
 
 - **`select_multiple` fields publish the field name directly.** SurveyCTO already stores `select_multiple` submission values as a space-separated string; do *not* invent a pre-joined helper field (e.g. `species_joined`) and point `formField` at it. Use the real `select_multiple` field name.
 - **Every name in `fieldMap` must really exist in the form.** The publishing engine maps by literal field name; there is no form-side pre-processing layer. Verify each `formField` against the form's actual `survey` rows before uploading the dataset definition.
+
+## dataLink element order
+
+The children of `<dataLink>` are validated as an ordered sequence by the server schema. They must appear in exactly this order; any optional element you omit is simply skipped, but the ones you include cannot be reordered:
+
+`dataLinkClass`, `dataLinkType`, `dataLinkState`, `dataLinkFormat`, `linkObjectId`, `fieldMap`, `joiningField`, `relevanceField`, `isAutoConfigured`
+
+The common mistake is placing `joiningField` before `fieldMap`. That produces this upload error:
+
+```
+cvc-complex-type.2.4.a: Invalid content was found starting with element 'fieldMap'. One of '{relevanceField, isAutoConfigured}' is expected.
+```
+
+The fix is ordering only: move `fieldMap` ahead of `joiningField`. The error names `relevanceField` and `isAutoConfigured` because those are what the schema allows after `joiningField`, but neither is required. `fieldMap`, `joiningField`, `relevanceField`, and `isAutoConfigured` are all optional; only `dataLinkClass`, `dataLinkType`, and `linkObjectId` are required.
+
+## Long format publishing
+
+Set `<dataLinkFormat>1</dataLinkFormat>` to publish each instance of a repeat group as its own dataset row (long format). With the default `0` (wide), each repeat instance becomes a separate set of numbered columns in a single row instead.
+
+Use this when a form has a repeat group and the user wants one dataset row per repeat instance. Worked example for a form with a non-repeated `farmer_id` and a repeat group `plot_measurements` containing `plot_id`, `area_ha`, and `crop_type`, publishing one row per plot:
+
+```xml
+<dataset>
+  <definition>
+    <id>repeat_plots</id>
+    <title>Plot Measurements</title>
+    <datasetType>SERVER</datasetType>
+    <fieldNames>plot_id_key,area_ha,crop_type</fieldNames>
+    <formLinks/>
+    <dataLinks>
+      <dataLink>
+        <dataLinkClass>FORM</dataLinkClass>
+        <dataLinkType>INCOMING</dataLinkType>
+        <dataLinkFormat>1</dataLinkFormat>
+        <linkObjectId>plot_measurement_form</linkObjectId>
+        <fieldMap>[{"formField":"plot_id*","datasetField":"plot_id_key*","updateLogicAction":"REPLACE","updateLogicOptions":null},{"formField":"area_ha*","datasetField":"area_ha*","updateLogicAction":"REPLACE","updateLogicOptions":null},{"formField":"crop_type*","datasetField":"crop_type*","updateLogicAction":"REPLACE","updateLogicOptions":null}]</fieldMap>
+        <joiningField>plot_id*</joiningField>
+        <isAutoConfigured>false</isAutoConfigured>
+      </dataLink>
+    </dataLinks>
+    <discriminator>DATA</discriminator>
+    <uniqueRecordField>plot_id</uniqueRecordField>
+    <allowOfflineUpdates>false</allowOfflineUpdates>
+  </definition>
+  <instance>
+    <version>1</version>
+  </instance>
+</dataset>
+```
+
+Naming rules for long format, all of which the example above follows:
+
+- **`joiningField`**: the form field that identifies a unique record, written as the form field name with the `*` suffix (`plot_id*`). It identifies which repeated rows are distinct.
+- **`uniqueRecordField`**: the same field as the bare form field name, with no `*` (`plot_id`).
+- **All repeated fields** carry `*` on both `formField` and `datasetField`, as in wide format.
+- **Dataset column names are your choice.** The example names the lookup column `plot_id_key`: the `_key` suffix is an indexing convention, not a long-format requirement. Columns whose names end in `_key` are automatically indexed on client (device) datasets to speed up `search()` and `pulldata()` lookups. It does not affect whether publishing succeeds, so do not treat `_key` as a rule the way the joining-field and `*` conventions are.
+
+The server enforces these structural rules; the field selection must satisfy them or the upload is rejected:
+
+1. A `joiningField` is required for long format.
+2. The joining field must exist in the form and be inside a repeat group.
+3. Every other published field (and the `relevanceField`, if used) must be in the same repeat instance as the joining field, in a parent group, or outside all groups. A field from a different, sibling repeat group does not qualify.
 
 ## Common modifications
 
@@ -130,6 +194,7 @@ Repeated fields use `*` suffix in field map entries:
 ## Critical notes
 
 - **Element names are case-sensitive**: `otherUserCode` (not `otherUsercode`), `showFinalizedSentWhenTree` (not `showfinalizedsentwhentree`).
+- **`<dataLink>` children must follow the schema order** (see [dataLink element order](#datalink-element-order)). In particular `fieldMap` comes before `joiningField`.
 - **Cannot upload if `<formLinks>` or `<dataLinks>` reference non-existent forms.** Deploy forms first.
 - **`<showColumnsWhenTable>` contains multiple `<columnNames>` child elements**, not a single comma-separated string.
 - **To modify an existing dataset**: Download XML + CSV, delete dataset, upload modified XML, then upload CSV data using Append mode.
