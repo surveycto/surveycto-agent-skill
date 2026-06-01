@@ -89,7 +89,7 @@ The server validates an uploaded definition against a strict schema. Two rules c
   - `<caseManagementOptions>` must contain `displayMode`, `showFinalizedSentWhenTree`, and `showColumnsWhenTable`. `otherUserCode`, `entryMode`, and `enumeratorDatasetId` are optional. Use `<displayMode>table</displayMode>` for table view and `<displayMode>tree</displayMode>` for tree view.
   - `<idFormatOptions>` must contain `numberOfDigits`. `prefix`, `suffix`, and `allowCapitalLetters` are optional.
 
-## Base columns by dataset type
+## Base columns by discriminator (CASES and ENUMERATORS)
 
 `<fieldNames>` is a free-form, comma-separated list, and the server does not reject a definition for missing columns. But case-management and enumerator datasets each have a standard column set that the SurveyCTO console always creates. When you author these by hand, reproduce the standard set by default so the file behaves like one created in the console, then append any extra columns the user asked for after the standard ones. Column order is not enforced by the server; follow the standard order for readability.
 
