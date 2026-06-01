@@ -1009,9 +1009,11 @@ function setFocus()    { var i = document.getElementById('plugin-input'); if (i 
     var jsonProps = JSON.stringify(opts.fieldProperties);
     var jsonManifest = JSON.stringify(opts.manifest);
     // User-supplied CSS / JS is spliced into <style> / <script> tags below.
-    // A literal "</style>" or "</script>" anywhere in the source would close
-    // the wrapper tag prematurely. Neutralize them; the browser parses the
-    // backslash-escaped form as the same characters at runtime.
+    // A literal "</style" or "</script" closing tag (the trailing ">" is left
+    // off here on purpose: writing the full closing tag inside this very script
+    // block would terminate it early and break the harness) anywhere in the
+    // source would close the wrapper tag prematurely. Neutralize them; the
+    // browser parses the backslash-escaped form as the same characters at runtime.
     var safeCss = String(opts.css).replace(/<\/style/gi, '<\\/style');
     var safeJs  = String(opts.js).replace(/<\/script/gi, '<\\/script');
     return [
