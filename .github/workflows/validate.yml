@@ -1,0 +1,19 @@
+name: Validate
+
+on:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install validation dependencies
+        run: python3 -m pip install openpyxl==3.1.5
+
+      - name: Validate XLSX assets
+        run: python3 tests/validate_xlsx_assets.py
+
+      - name: Validate doc examples
+        run: python3 tests/validate_doc_examples.py
