@@ -32,7 +32,8 @@ from xml.etree import ElementTree
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DOC_FILES = [REPO_ROOT / "SKILL.md"] + sorted((REPO_ROOT / "references").glob("*.md"))
 
-XML_BLOCK = re.compile(r"```xml\n(.*?)```", re.S)
+# Tolerate an optional info-string tail after ```xml and both LF and CRLF newlines.
+XML_BLOCK = re.compile(r"```xml[^\n]*\r?\n(.*?)```", re.S)
 
 # Canonical child order of each ordered (xs:sequence) container in the dataset
 # schema. Children may be omitted, but the ones present cannot be reordered.
@@ -67,7 +68,7 @@ CONTAINER_ORDER = {
 
 
 def xml_blocks(doc: Path) -> list[str]:
-    return XML_BLOCK.findall(doc.read_text())
+    return XML_BLOCK.findall(doc.read_text(encoding="utf-8"))
 
 
 def check_well_formed(block: str) -> str | None:
