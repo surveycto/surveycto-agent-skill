@@ -63,9 +63,9 @@ Forms referenced in `<formLinks>` or `<dataLinks>` must be deployed before uploa
     </caseManagementOptions>
 
     <idFormatOptions>                       <!-- For enumerator datasets -->
-      <prefix>ENU-</prefix>                 <!-- Optional -->
-      <suffix>-2024</suffix>                <!-- Optional -->
-      <numberOfDigits>4</numberOfDigits>    <!-- Required -->
+      <prefix>ENU</prefix>                  <!-- Optional: alphanumeric only, max 10 chars -->
+      <suffix>2024</suffix>                 <!-- Optional: alphanumeric only, max 10 chars -->
+      <numberOfDigits>4</numberOfDigits>    <!-- Required: 4 to 8 (default 6) -->
       <allowCapitalLetters>false</allowCapitalLetters>  <!-- Optional -->
     </idFormatOptions>
 
@@ -79,6 +79,47 @@ Forms referenced in `<formLinks>` or `<dataLinks>` must be deployed before uploa
   </instance>
 </dataset>
 ```
+
+## Required structure: element order and mandatory children
+
+The server validates an uploaded definition against a strict schema and then against value rules that the schema does not express. Both kinds of rules reject the upload (HTTP 400) if broken, so follow them exactly.
+
+Structure rules:
+
+- **`<definition>` children must appear in this order** (omit any that do not apply, but never reorder them): `id`, `title`, `datasetType`, `fieldNames`, `formLinks`, `dataLinks`, `caseManagementOptions`, `idFormatOptions`, `discriminator`, `uniqueRecordField`, `allowOfflineUpdates`. In particular, `caseManagementOptions` and `idFormatOptions` come before `discriminator` and `uniqueRecordField`, not after. `id`, `title`, and `datasetType` are required.
+- **Mandatory children of the option blocks:**
+  - `<caseManagementOptions>` must contain `displayMode`, `showFinalizedSentWhenTree`, and `showColumnsWhenTable`. `otherUserCode`, `entryMode`, and `enumeratorDatasetId` are optional. Use `<displayMode>table</displayMode>` for table view and `<displayMode>tree</displayMode>` for tree view.
+  - `<idFormatOptions>` must contain `numberOfDigits`. `prefix`, `suffix`, and `allowCapitalLetters` are optional.
+
+Value rules (not enforced by the schema, so easy to miss; each one rejects the upload):
+
+- **`<numberOfDigits>` must be an integer from 4 to 8** (default 6). There is no way to specify zero digits or a letters-only ID through `idFormatOptions`. If the user asks for something outside 4 to 8, tell them the supported range rather than writing an out-of-range value.
+- **`<prefix>` and `<suffix>` must be alphanumeric only** (letters and digits, no hyphens, spaces, or other punctuation) and **at most 10 characters**. A common mistake is a value like `ENU-` or `-2024`; the hyphen is rejected. Use `ENU` or `2024`.
+- **For `<displayMode>table</displayMode>`, `<showColumnsWhenTable>` must be non-empty and must include the `id` column.** A table-view cases dataset whose displayed columns omit `id` is rejected.
+
+## Base columns by discriminator (CASES and ENUMERATORS)
+
+`<fieldNames>` is a free-form, comma-separated list, and the server does not reject a definition for missing columns. But case-management and enumerator datasets each have a standard column set that the SurveyCTO console always creates. When you author these by hand, reproduce the standard set by default so the file behaves like one created in the console, then append any extra columns the user asked for after the standard ones. Column order is not enforced by the server; follow the standard order for readability.
+
+### ENUMERATORS datasets
+
+Standard columns: `id,name,users`.
+
+- `id` (required): unique enumerator ID. Set `<uniqueRecordField>id</uniqueRecordField>`.
+- `name` (required): enumerator display name.
+- `users` (include by default): comma-separated usernames controlling which users see each enumerator. Include it unless the user explicitly asks for no per-user filtering. It powers filtering the enumerator picker to the logged-in user, auto-selecting that user's own enumerator, and the manager-code prompt when someone picks a different enumerator. The console always creates this column, so omitting it produces a dataset that silently loses those behaviors. A blank value means that enumerator is shown to all users.
+- Append any user-requested columns after these. For example, a requested `region` column gives `id,name,users,region`, not `id,name,region`.
+- `<idFormatOptions>` is required for a new enumerator dataset. Gather its values from the user; do not invent them. The server enforces: `numberOfDigits` from 4 to 8 (default 6), and `prefix`/`suffix` alphanumeric only (no hyphens or punctuation) and at most 10 characters. See the value rules above.
+
+### CASES datasets
+
+Standard columns, in this order: `id,label,formids,users,roles,sortby,enumerators`.
+
+- Required: `id` (unique case ID), `label` (text shown in the case list), and `formids` (comma-separated form IDs for the case). A case dataset missing any of these three fails when Collect tries to render the case list.
+- Conventional but technically optional: `users` (filter by username), `roles` (filter by user role), `sortby` (numeric sort order, low to high; cases sort by `id` when absent), and `enumerators` (filter by enumerator ID). Include all four by default to match the console and keep later filtering available; their per-row values may be left blank.
+- `id` is the unique record field: `<uniqueRecordField>id</uniqueRecordField>`.
+
+See [Enumerator management](https://docs.surveycto.com/04-monitoring-and-management/01-the-basics/01.z.enumerator-management.html) and [Case management](https://docs.surveycto.com/03-collecting-data/03-data-collection-workflow/02.case-management.html) for the column semantics.
 
 ## Field map JSON
 

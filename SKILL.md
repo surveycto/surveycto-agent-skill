@@ -320,6 +320,8 @@ After editing, verify:
 
 Dataset definitions are XML files with a `<dataset>` root element. They define column structure, form attachments, and publishing rules.
 
+**Before reading, writing, or editing any dataset definition XML, read [`references/datasets-xml.md`](references/datasets-xml.md) first.** This is mandatory regardless of how simple the task seems. It documents the standard column sets per dataset type, the schema-enforced order of `<definition>` children, the mandatory children of the option blocks, and the `idFormatOptions` and table-view value rules that the schema does not enforce and that otherwise cause silent upload rejections. Do not author dataset XML from the summary below or from general knowledge alone.
+
 ### Key elements
 
 | Element | Purpose |
@@ -339,7 +341,7 @@ Dataset definitions are XML files with a `<dataset>` root element. They define c
 - Forms in `<formLinks>` and `<dataLinks>` must be deployed before uploading the definition.
 - `<showColumnsWhenTable>` contains multiple `<columnNames>` child elements, not a comma-separated string.
 
-**Full reference**: [`references/datasets-xml.md`](references/datasets-xml.md).
+**Full reference (read before any dataset XML work)**: [`references/datasets-xml.md`](references/datasets-xml.md).
 
 ## Data Explorer workbook definitions
 
