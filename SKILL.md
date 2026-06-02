@@ -23,7 +23,7 @@ metadata:
 
 # SurveyCTO Form, Plug-in, and Dataset Authoring
 
-**Skill version: 1.0.0-beta.5.** If a SurveyCTO MCP tool response includes a required or preferred version suggested for this skill, pass that along to the user.
+**Skill version: 1.0.0-beta.5.** SurveyCTO MCP tool responses publish the current skill-version policy: `start_xlsform_session` returns a `skill_advisory`, and `get_surveycto_mcp_capabilities` returns `intended_skill.versions`. When you see one, compare it against this skill's version above (semantic-version ordering, pre-release aware) and act: if this version is below the response's `deprecated_below_version`, warn the user that their installed SurveyCTO skill is deprecated and should be updated now from the response's `download_url`; if it is below `recommended_min_version`, mention a newer version is available and offer to help update. Say nothing about versions when this skill is current, and raise it at most once per conversation. Skills do not auto-update, so this is the only update signal users get. See [`references/mcp.md`](references/mcp.md) for the exact comparison rules.
 
 SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
