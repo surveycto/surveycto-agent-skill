@@ -170,6 +170,16 @@ Use [semantic versioning](https://semver.org):
 - **Minor** (1.0.0 → 1.1.0): Add new content (new reference sections, new patterns, template updates)
 - **Major** (1.x → 2.0.0): Structural changes that may affect how agents use the skill
 
+#### Broadcasting versions through the MCP server
+
+Skills do not auto-update and there is no separate update channel, so the SurveyCTO MCP server announces the current skill-version policy to connected agents (it serves the recommended and deprecated versions, and agents prompt users to update). The editorial half of that policy lives in `version-policy.source.json`:
+
+- `deprecated_below_version`: versions below this are announced as deprecated. Raise it only when an older release becomes genuinely problematic.
+- `recommended_min_version` (optional): defaults to the released version, so each release recommends itself. Pin it only to recommend an older floor than the latest.
+- `latest_updates`: a short, newest-first summary shown to agents.
+
+Update `version-policy.source.json` in the same PR that bumps the version when the deprecation floor or the update summary should change. On release, `scripts/build_version_policy.py` derives `latest_version` from the tag, validates that `deprecated_below ≤ recommended_min ≤ latest`, and publishes `version-policy.json` as a release asset; the MCP server bakes that asset into its next image. `latest_version` is never hand-edited.
+
 ### Building the zip locally
 
 The release zip is produced by GitHub Actions on push to `main` (and a

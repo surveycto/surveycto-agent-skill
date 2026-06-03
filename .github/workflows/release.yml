@@ -14,10 +14,16 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install validation dependencies
-        run: python3 -m pip install openpyxl==3.1.5
+        run: python3 -m pip install openpyxl==3.1.5 packaging
 
       - name: Validate XLSX assets
         run: python3 tests/validate_xlsx_assets.py
+
+      - name: Test version-policy generator
+        run: python3 tests/test_version_policy.py
+
+      - name: Validate doc examples
+        run: python3 tests/validate_doc_examples.py
 
       - name: Get version from SKILL.md
         id: version
@@ -29,6 +35,14 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Detected version: $VERSION"
+
+      - name: Build version-policy.json
+        run: |
+          python3 scripts/build_version_policy.py \
+            --version "${{ steps.version.outputs.version }}" \
+            --source version-policy.source.json \
+            --output version-policy.json
+          cat version-policy.json
 
       - name: Check if release already exists
         id: check
@@ -62,15 +76,35 @@ jobs:
             Download `surveycto-skill.zip` below and follow the install steps in the [README](https://github.com/surveycto/surveycto-agent-skill/blob/main/README.md) for your agent platform.
           append_body: true
           generate_release_notes: true
-          files: surveycto-skill.zip
+          files: |
+            surveycto-skill.zip
+            version-policy.json
           make_latest: true
 
-      - name: Refresh asset on existing release
+      - name: Refresh assets on existing release
         if: steps.check.outputs.exists == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: v${{ steps.version.outputs.version }}
         run: |
-          gh release upload "$TAG" surveycto-skill.zip \
+          gh release upload "$TAG" surveycto-skill.zip version-policy.json \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
+
+      # Tell the MCP server a new skill release exists so it rebuilds and bakes
+      # in the fresh version-policy.json. Cross-org dispatch needs a token with
+      # access to scto-dev/scto-assistant-be (a GitHub App installation token or
+      # a fine-grained PAT), stored as the MCP_DISPATCH_TOKEN secret. When the
+      # secret is absent the step is skipped, so the release never fails on it.
+      - name: Notify MCP server of new skill release
+        env:
+          GH_TOKEN: ${{ secrets.MCP_DISPATCH_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "MCP_DISPATCH_TOKEN not set; skipping cross-repo dispatch."
+            exit 0
+          fi
+          gh api -X POST repos/scto-dev/scto-assistant-be/dispatches \
+            -f event_type=skill-released \
+            -f "client_payload[version]=$VERSION"
