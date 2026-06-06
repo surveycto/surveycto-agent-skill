@@ -150,11 +150,32 @@ one gets a warning, because the inferred one is what actually applies.
   The full standard set is `id,label,formids,users,roles,sortby,enumerators`;
   the last four are recommendations.
 
-### fieldNames (errors)
+### fieldNames
 
-- No field may use the reserved name `rowId`.
-- No field name may exceed 60 characters.
-- A duplicated column is a warning.
+- No field name may exceed 60 characters (error). This limit also covers the
+  `datasetField` columns named in a field map.
+- Two columns that collapse to the same database name (after replacing every
+  non-`[A-Za-z0-9_]` character with `_` and comparing case-insensitively, so
+  `Region`/`region` or `my field`/`my_field` collide) are rejected on import
+  (error).
+- The reserved name `rowId` is a warning: the import path does not reject it, but
+  it can cause problems, so rename it.
+
+### uniqueRecordField
+
+- Cases and enumerator datasets ignore a supplied `<uniqueRecordField>` and force
+  `id` (a non-`id` value is a warning; a missing one is a warning).
+- For a DATA dataset, a non-blank `<uniqueRecordField>` must be one of the columns
+  in `<fieldNames>`, or the server rejects the upload (error). This holds for long
+  format too: use the dataset column the joining field maps into, not the bare
+  form field.
+- `allowOfflineUpdates` enabled on a DATA dataset without a unique record field is
+  an error. Boolean elements must be `true`/`false`/`1`/`0` (lowercase); other
+  values are rejected by the schema (error).
+- Always include `<formLinks>` and `<dataLinks>`, even empty: omitting either
+  makes the import fail (warning).
+
+### Field map and publishing rules
 
 ### Field map and publishing rules
 

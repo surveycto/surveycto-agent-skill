@@ -30,13 +30,13 @@ Forms referenced in `<formLinks>` or `<dataLinks>` must be deployed before uploa
     <datasetType>SERVER</datasetType>       <!-- Required: always SERVER (see Dataset types) -->
     <fieldNames>col1,col2,col3</fieldNames> <!-- Optional: column order/names -->
 
-    <formLinks>                             <!-- Optional: forms that attach/pre-load this dataset -->
+    <formLinks>                             <!-- Include even if empty: forms that attach/pre-load this dataset -->
       <formLink>
         <formId>form_id</formId>
       </formLink>
     </formLinks>
 
-    <dataLinks>                             <!-- Optional: data publishing rules -->
+    <dataLinks>                             <!-- Include even if empty: data publishing rules -->
       <dataLink>                            <!-- Children MUST appear in the order below -->
         <dataLinkClass>FORM</dataLinkClass>         <!-- Required: FORM or SPREADSHEET -->
         <dataLinkType>INCOMING</dataLinkType>        <!-- Required: INCOMING or OUTGOING -->
@@ -87,11 +87,15 @@ The server validates an uploaded definition against a strict schema and then aga
 Structure rules:
 
 - **`<definition>` children must appear in this order** (omit any that do not apply, but never reorder them): `id`, `title`, `datasetType`, `fieldNames`, `formLinks`, `dataLinks`, `caseManagementOptions`, `idFormatOptions`, `discriminator`, `uniqueRecordField`, `allowOfflineUpdates`. In particular, `caseManagementOptions` and `idFormatOptions` come before `discriminator` and `uniqueRecordField`, not after. `id`, `title`, and `datasetType` are required.
+- **Always include `<formLinks>` and `<dataLinks>`, even when empty** (`<formLinks/>`, `<dataLinks/>`). The schema marks them optional, but the import path dereferences them unconditionally, so omitting either makes the upload fail with a server error. Inside the option blocks, child order does not matter (`caseManagementOptions`, `idFormatOptions`, the `formLink`, and the `<dataset>` root use order-independent content); only the `<definition>` and `<dataLink>` sequences are order-sensitive.
 - **Mandatory children of the option blocks:**
   - `<caseManagementOptions>` must contain `displayMode`, `showFinalizedSentWhenTree`, and `showColumnsWhenTable`. `otherUserCode`, `entryMode`, and `enumeratorDatasetId` are optional. Use `<displayMode>table</displayMode>` for table view and `<displayMode>tree</displayMode>` for tree view.
   - `<idFormatOptions>` must contain `numberOfDigits`. `prefix`, `suffix`, and `allowCapitalLetters` are optional.
 
 Value rules (not enforced by the schema, so easy to miss; each one rejects the upload):
+
+- **`<uniqueRecordField>` (when set on a DATA dataset) must be one of the names in `<fieldNames>`.** A new dataset whose unique record field is not an existing column is rejected with `Sorry, the field "..." doesn't exist in the dataset`. This applies to long format too (use the dataset column the joining field maps into, not the bare form field). Cases and enumerator datasets ignore the supplied value and force `id`.
+- **Boolean elements use the XSD lexical space `true`, `false`, `1`, `0` (lowercase only).** `TRUE`, `True`, or `yes` are rejected by schema validation. Integer elements (`numberOfDigits`, `dataLinkFormat`) must be bare integers; a `dataLinkFormat` other than `0` or `1` is silently treated as wide.
 
 - **`<numberOfDigits>` must be an integer from 4 to 8** (default 6). There is no way to specify zero digits or a letters-only ID through `idFormatOptions`. If the user asks for something outside 4 to 8, tell them the supported range rather than writing an out-of-range value.
 - **`<prefix>` and `<suffix>` must be alphanumeric only** (letters and digits, no hyphens, spaces, or other punctuation) and **at most 10 characters**. A common mistake is a value like `ENU-` or `-2024`; the hyphen is rejected. Use `ENU` or `2024`.
@@ -109,7 +113,7 @@ Standard columns: `id,name,users`.
 - `name` (required): enumerator display name.
 - `users` (include by default): comma-separated usernames controlling which users see each enumerator. Include it unless the user explicitly asks for no per-user filtering. It powers filtering the enumerator picker to the logged-in user, auto-selecting that user's own enumerator, and the manager-code prompt when someone picks a different enumerator. The console always creates this column, so omitting it produces a dataset that silently loses those behaviors. A blank value means that enumerator is shown to all users.
 - Append any user-requested columns after these. For example, a requested `region` column gives `id,name,users,region`, not `id,name,region`.
-- `<idFormatOptions>` is required for a new enumerator dataset. Gather its values from the user; do not invent them. The server enforces: `numberOfDigits` from 4 to 8 (default 6), and `prefix`/`suffix` alphanumeric only (no hyphens or punctuation) and at most 10 characters. See the value rules above.
+- `<idFormatOptions>` is strongly recommended for a new enumerator dataset: if you omit it, the server defaults to 6 digits with no prefix or suffix. Gather the values from the user rather than inventing them. The server enforces: `numberOfDigits` from 4 to 8 (default 6), and `prefix`/`suffix` alphanumeric only (no hyphens or punctuation) and at most 10 characters. Generated IDs are assembled as `prefix` + zero-padded number + `suffix` with no separator (so `prefix=ENU`, `numberOfDigits=6` yields IDs like `ENU000123`). See the value rules above.
 
 ### CASES datasets
 
@@ -199,7 +203,7 @@ Use this when a form has a repeat group and the user wants one dataset row per r
       </dataLink>
     </dataLinks>
     <discriminator>DATA</discriminator>
-    <uniqueRecordField>plot_id</uniqueRecordField>
+    <uniqueRecordField>plot_id_key</uniqueRecordField>
     <allowOfflineUpdates>false</allowOfflineUpdates>
   </definition>
   <instance>
@@ -211,7 +215,7 @@ Use this when a form has a repeat group and the user wants one dataset row per r
 Naming rules for long format, all of which the example above follows:
 
 - **`joiningField`**: the form field that identifies a unique record, written as the form field name with the `*` suffix (`plot_id*`). It identifies which repeated rows are distinct.
-- **`uniqueRecordField`**: the same field as the bare form field name, with no `*` (`plot_id`).
+- **`uniqueRecordField`**: the **dataset column** that the joining field publishes into, with no `*` (`plot_id_key`). It must be one of the names in `<fieldNames>`. Do **not** use the bare form-field name (`plot_id`) here: for a new dataset the server rejects a `uniqueRecordField` that is not an existing column with `Sorry, the field "..." doesn't exist in the dataset`. Because the joining field maps `plot_id*` into `plot_id_key*`, naming the column `plot_id_key` here also satisfies the rule that the joining field must merge on the unique record column.
 - **All repeated fields** carry `*` on both `formField` and `datasetField`, as in wide format.
 - **Dataset column names are your choice.** The example names the lookup column `plot_id_key`: the `_key` suffix is an indexing convention, not a long-format requirement. Columns whose names end in `_key` are automatically indexed on client (device) datasets to speed up `search()` and `pulldata()` lookups. It does not affect whether publishing succeeds, so do not treat `_key` as a rule the way the joining-field and `*` conventions are.
 

@@ -355,11 +355,54 @@ def test_cases_missing_required_column_is_warning():
 # ---------------------------------------------------------------------------
 
 @test
-def test_reserved_rowid_rejected():
+def test_reserved_rowid_is_warning():
+    # The import path does not reject 'rowId', so it is a warning, not an error.
     r = _run_xml(_wrap(
         "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
         "<fieldNames>key,rowId</fieldNames>"))
-    _expect("field-reserved" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+    _expect("field-reserved" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_db_column_name_collision_is_error():
+    # 'Region' and 'region' both safen to the same DB column name.
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,Region,region</fieldNames>"))
+    _expect("field-column-conflict" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_xsd_boolean_lexical_rejected():
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>key</fieldNames><formLinks/><dataLinks/>"
+        "<uniqueRecordField>key</uniqueRecordField>"
+        "<allowOfflineUpdates>TRUE</allowOfflineUpdates>"))
+    _expect("xsd-boolean-lexical" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_offline_updates_not_required_for_cases_dataset():
+    # The server forces urf='id' for cases datasets, so offline updates without an
+    # explicit uniqueRecordField is not an error.
+    r = _run_xml(_wrap(
+        "<id>cases</id><title>C</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,label,formids,users,roles,sortby,enumerators</fieldNames>"
+        "<formLinks/><dataLinks/>"
+        "<caseManagementOptions><displayMode>tree</displayMode>"
+        "<showFinalizedSentWhenTree>true</showFinalizedSentWhenTree>"
+        "<showColumnsWhenTable/></caseManagementOptions>"
+        "<discriminator>CASES</discriminator>"
+        "<allowOfflineUpdates>true</allowOfflineUpdates>"))
+    _expect("offline-requires-urf" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_missing_formlinks_datalinks_warned():
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"))
+    _expect("definition-formlinks-required" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
 
 
 @test
@@ -465,22 +508,25 @@ def test_datalink_order_enforced():
 # ---------------------------------------------------------------------------
 
 @test
-def test_long_format_unique_record_field_not_a_column_is_ok():
-    # uniqueRecordField is the bare form field, intentionally not in fieldNames.
+def test_long_format_unique_record_field_must_be_a_column():
+    # The server rejects a new dataset whose uniqueRecordField is not in
+    # <fieldNames>, with no long-format carve-out. For long format the unique
+    # record field is the dataset COLUMN the joining field maps into.
     fm = ('[{"formField":"plot_id*","datasetField":"plot_id_key*","updateLogicAction":"REPLACE"},'
           '{"formField":"area_ha*","datasetField":"area_ha*","updateLogicAction":"REPLACE"}]')
-    xml = _wrap(
-        "<id>plots</id><title>P</title><datasetType>SERVER</datasetType>"
-        "<fieldNames>plot_id_key,area_ha</fieldNames>"
-        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
-        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
-        f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap>"
-        "<joiningField>plot_id*</joiningField></dataLink></dataLinks>"
-        "<discriminator>DATA</discriminator><uniqueRecordField>plot_id</uniqueRecordField>")
-    r = _run_xml(xml)
-    _expect(not r.has_errors, f"long-format example should be clean: {_codes(r, vd.ERROR)}")
-    _expect("urf-not-a-column" not in _codes(r, vd.WARNING),
-            "long-format uniqueRecordField must not warn about missing column")
+    base = ("<id>plots</id><title>P</title><datasetType>SERVER</datasetType>"
+            "<fieldNames>plot_id_key,area_ha</fieldNames>"
+            "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+            "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
+            f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap>"
+            "<joiningField>plot_id*</joiningField></dataLink></dataLinks>"
+            "<discriminator>DATA</discriminator>")
+    # Bare form field 'plot_id' (not a column) is rejected.
+    r_bad = _run_xml(_wrap(base + "<uniqueRecordField>plot_id</uniqueRecordField>"))
+    _expect("urf-not-a-column" in _codes(r_bad, vd.ERROR), _codes(r_bad, vd.ERROR))
+    # The dataset column 'plot_id_key' is accepted.
+    r_ok = _run_xml(_wrap(base + "<uniqueRecordField>plot_id_key</uniqueRecordField>"))
+    _expect("urf-not-a-column" not in _codes(r_ok, vd.ERROR), _codes(r_ok, vd.ERROR))
 
 
 # ---------------------------------------------------------------------------
@@ -656,7 +702,7 @@ def test_cross_reference_clean_when_consistent():
         "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
         f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap>"
         "<joiningField>plot_id*</joiningField></dataLink></dataLinks>"
-        "<discriminator>DATA</discriminator><uniqueRecordField>plot_id</uniqueRecordField>")
+        "<discriminator>DATA</discriminator><uniqueRecordField>plot_id_key</uniqueRecordField>")
     r = _run_xml(xml, forms=[form])
     _expect(not r.has_errors, f"consistent cross-reference should be clean: {_codes(r, vd.ERROR)}")
 

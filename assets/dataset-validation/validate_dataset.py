@@ -451,6 +451,7 @@ class DataLink:
         self.field_map_raw: Optional[str] = None
         self.joining_field: Optional[str] = None
         self.relevance_field: Optional[str] = None
+        self.is_auto_configured_raw: Optional[str] = None
         # Parsed field map as list of (formField, datasetField, updateLogicAction).
         self.field_map: Optional[list[tuple]] = None
         self.field_map_error: Optional[str] = None
@@ -608,6 +609,8 @@ def _parse_data_link(dl_el, idx: int) -> DataLink:
             dl.joining_field = _text(c)
         elif name == "relevanceField":
             dl.relevance_field = _text(c)
+        elif name == "isAutoConfigured":
+            dl.is_auto_configured_raw = _text(c)
     if dl.field_map_raw:
         try:
             dl.field_map = parse_field_map(dl.field_map_raw)
@@ -642,8 +645,21 @@ def _is_unicode_alnum(value: str) -> bool:
     """Mirror Apache Commons StringUtils.isAlphanumeric: non-empty, and every
     character is a Unicode letter or digit. The server applies this to the
     idFormatOptions prefix and suffix, so an accented prefix like 'Énu' is valid.
+    Uses isdecimal (Unicode Nd, matching Java Character.isDigit) rather than
+    isdigit, which would also accept superscripts the server rejects.
     """
-    return bool(value) and all(c.isalpha() or c.isdigit() for c in value)
+    return bool(value) and all(c.isalpha() or c.isdecimal() for c in value)
+
+
+# xs:boolean lexical space: exactly these, case-sensitive. The server validates
+# the definition against the XSD first, so any other value (TRUE, True, yes) is
+# rejected before the value logic runs.
+XSD_BOOLEAN_VALID = {"true", "false", "1", "0"}
+XSD_BOOLEAN_TRUE = {"true", "1"}
+
+
+def _xsd_boolean_is_true(text: Optional[str]) -> bool:
+    return (text or "").strip() in XSD_BOOLEAN_TRUE
 
 
 def _check_sequence(children: list[str], order: list[str], report: Report,
@@ -673,6 +689,7 @@ def validate_dataset(ds: Dataset, forms: dict[str, list[FormField]], report: Rep
     _validate_structure(ds, report)
     _validate_identity(ds, report)
     _validate_type_and_discriminator(ds, report)
+    _validate_xsd_booleans(ds, report)
     _validate_field_names(ds, report)
     _validate_id_format(ds, report)
     _validate_case_mgmt(ds, report)
@@ -690,14 +707,50 @@ def _validate_structure(ds: Dataset, report: Report) -> None:
             report.error("definition-required",
                          f"<definition> is missing the required <{req}> element.",
                          "<definition>")
+    # The import path dereferences getFormLinks()/getDataLinks() unconditionally,
+    # so omitting either element makes the server fail the upload with an NPE,
+    # even though the schema marks them optional. Always include them, empty if
+    # unused.
+    for req in ("formLinks", "dataLinks"):
+        if req not in ds.definition_children:
+            report.warning("definition-formlinks-required",
+                           f"Omitting <{req}> makes the server fail the import with an internal "
+                           f"error. Include an empty <{req}/> even when it is unused.",
+                           "<definition>", fix=f"Add <{req}/>.")
+
+
+def _validate_xsd_booleans(ds: Dataset, report: Report) -> None:
+    """Boolean-typed elements must use the xs:boolean lexical space (true/false/
+    1/0, case-sensitive); the server rejects anything else (TRUE, yes) at XSD
+    validation, before any value logic."""
+    checks = [("allowOfflineUpdates", ds.allow_offline_updates, "definition/allowOfflineUpdates")]
+    if ds.case_mgmt is not None and "showFinalizedSentWhenTree" in ds.case_mgmt:
+        checks.append(("showFinalizedSentWhenTree", ds.case_mgmt.get("showFinalizedSentWhenTree"),
+                       "definition/caseManagementOptions"))
+    if ds.id_format is not None and "allowCapitalLetters" in ds.id_format:
+        checks.append(("allowCapitalLetters", ds.id_format.get("allowCapitalLetters"),
+                       "definition/idFormatOptions"))
+    for dl in ds.data_links:
+        if dl.is_auto_configured_raw is not None:
+            checks.append((f"isAutoConfigured (dataLink[{dl.index}])", dl.is_auto_configured_raw,
+                           f"dataLink[{dl.index}]"))
+    for name, value, loc in checks:
+        if value not in (None, "") and value.strip() not in XSD_BOOLEAN_VALID:
+            report.error("xsd-boolean-lexical",
+                         f"<{name.split()[0]}> is {value!r}; an xs:boolean must be one of "
+                         "true, false, 1, 0 (lowercase). The server rejects other values.", loc)
 
 
 def _validate_identity(ds: Dataset, report: Report) -> None:
     if not ds.id:
         report.error("id-blank", "Please specify an ID for the dataset.", "definition/id")
     else:
-        # The server validates the ID case-insensitively against [0-9a-z_-].
-        if not _ID_RE.match(ds.id.lower()):
+        # The server strips a leading "formid." (implicit-dataset prefix) before
+        # validating the rest case-insensitively against [0-9a-z_-].
+        to_check = ds.id
+        if to_check.lower().startswith("formid."):
+            to_check = to_check[len("formid."):]
+        if not _ID_RE.match(to_check.lower()):
             report.error(
                 "id-chars",
                 "The ID can only contain numbers, letters, dashes and underscores. "
@@ -706,9 +759,11 @@ def _validate_identity(ds: Dataset, report: Report) -> None:
             )
         if ds.id.lower().endswith("_qc") and (ds.dataset_type != "REPORT"):
             report.error("id-qc-suffix",
-                         "The ID can not end with '_qc'.", "definition/id")
+                         "The ID can not end with '_qc'. Please correct the ID and try again.",
+                         "definition/id")
     if not ds.title:
-        report.error("title-blank", "Please specify a title for the dataset.", "definition/title")
+        report.error("title-blank", "No title has been specified for this dataset.",
+                     "definition/title")
 
 
 def _validate_type_and_discriminator(ds: Dataset, report: Report) -> None:
@@ -721,13 +776,13 @@ def _validate_type_and_discriminator(ds: Dataset, report: Report) -> None:
                      f"{', '.join(sorted(DATASET_TYPES))}.", "definition/datasetType")
     elif ds.dataset_type == "CLIENT":
         report.error("type-client",
-                     "CLIENT (desktop) datasets are no longer supported. Use SERVER.",
+                     "I'm sorry but we no longer support desktop datasets. Use SERVER.",
                      "definition/datasetType",
                      fix="Set <datasetType>SERVER</datasetType>.")
     elif ds.dataset_type == "REPORT":
         report.error("type-report",
-                     "REPORT datasets are system-managed (quality-check warnings) and "
-                     "cannot be created from a definition. Use SERVER.",
+                     "You cannot create a quality checks report dataset like this. Please use "
+                     "the relevant action from inside the dataset action list. Use SERVER.",
                      "definition/datasetType",
                      fix="Set <datasetType>SERVER</datasetType>.")
 
@@ -754,23 +809,42 @@ def _validate_type_and_discriminator(ds: Dataset, report: Report) -> None:
                        "definition/discriminator")
 
 
+def _db_column_key(base: str) -> str:
+    # The server safens a field name to a DB column by replacing every character
+    # outside [A-Za-z0-9_] with '_' and comparing case-insensitively; two field
+    # names that collapse to the same key collide on import.
+    return re.sub(r"[^A-Za-z0-9_]", "_", base.strip()).lower()
+
+
 def _validate_field_names(ds: Dataset, report: Report) -> None:
-    seen: set[str] = set()
+    seen_keys: dict[str, str] = {}
     for col in ds.field_names:
         base = col[:-1] if col.endswith("*") else col
-        if base in RESERVED_FIELD_NAMES:
-            report.error("field-reserved",
-                         f"The field name {base!r} is reserved and cannot be used.",
-                         "definition/fieldNames")
-        if len(base) > MAX_FIELD_NAME_LENGTH:
+        # The import path does not reject the reserved name 'rowId' (that check is
+        # not on the import path), so it is a warning; the '*' is part of the name
+        # for the exact comparison, so 'rowId*' is not the reserved name.
+        if col in RESERVED_FIELD_NAMES:
+            report.warning("field-reserved",
+                           f"The field name {col!r} is reserved; rename it to avoid problems.",
+                           "definition/fieldNames")
+        # The length limit applies to the raw token, including any '*' suffix.
+        if len(col) > MAX_FIELD_NAME_LENGTH:
             report.error("field-too-long",
                          f"Dataset field names cannot be longer than {MAX_FIELD_NAME_LENGTH} "
-                         f"characters. Conflicting field: {base!r}.", "definition/fieldNames")
-        if base in seen:
-            report.warning("field-duplicate",
-                           f"Column {base!r} appears more than once in <fieldNames>.",
-                           "definition/fieldNames")
-        seen.add(base)
+                         f"characters. Conflicting field: {col!r}.", "definition/fieldNames")
+        key = _db_column_key(base)
+        if not key:
+            continue
+        if key in seen_keys:
+            first = seen_keys[key]
+            detail = (f"Column {base!r} appears more than once" if first == base
+                      else f"Columns {first!r} and {base!r} collapse to the same database column "
+                           f"name {key!r}")
+            report.error("field-column-conflict",
+                         f"{detail} in <fieldNames>; the server rejects the conflict on import.",
+                         "definition/fieldNames")
+        else:
+            seen_keys[key] = base
 
 
 def effective_discriminator(ds: Dataset) -> str:
@@ -943,28 +1017,45 @@ def _validate_standard_columns(ds: Dataset, report: Report) -> None:
                                  "definition/fieldNames")
 
 
+def _urf_forced_to_id(ds: Dataset) -> bool:
+    # The server forces uniqueRecordField to 'id' for enumerator/cases datasets,
+    # and also when the dataset id is literally "cases" (looksLikeCasesDataset).
+    return _is_enumerators(ds) or _is_cases(ds) or (ds.id or "") == "cases"
+
+
 def _validate_unique_record_field(ds: Dataset, report: Report) -> None:
     urf = ds.unique_record_field
+    forced_id = _urf_forced_to_id(ds)
     if not urf:
-        if _is_enumerators(ds) or _is_cases(ds):
+        if forced_id:
             report.warning("urf-missing",
                            "Cases and enumerator datasets use 'id' as the unique record field. "
                            "Add <uniqueRecordField>id</uniqueRecordField>.",
                            "definition/uniqueRecordField")
         return
-    if _is_enumerators(ds) or _is_cases(ds):
+    if forced_id:
+        # The server overwrites whatever is supplied with 'id'; it does not check
+        # the supplied value against the field list, so do not require it there.
         if urf != "id":
             report.warning("urf-not-id",
-                           f"Cases and enumerator datasets force the unique record field to "
-                           f"'id'; got {urf!r}.", "definition/uniqueRecordField")
-    # For long-format datasets the unique record field is the bare form field
-    # name and is intentionally not a dataset column, so do not require it in
-    # <fieldNames>.
-    if not ds.has_long_format_link and ds.field_names and urf not in _base_columns(ds):
-        report.warning("urf-not-a-column",
-                       f"The unique record field {urf!r} is not listed in <fieldNames>. The "
-                       "server requires it to be an existing dataset column.",
-                       "definition/uniqueRecordField")
+                           "Cases and enumerator datasets force the unique record field to "
+                           f"'id'; the supplied {urf!r} is ignored.", "definition/uniqueRecordField")
+        return
+    # For every other (DATA) dataset, a non-blank uniqueRecordField must be one of
+    # the columns in <fieldNames>, or the server rejects the upload. This applies
+    # to long-format datasets too: the unique record field is the dataset COLUMN
+    # the joining field maps into, not the bare form field. (No long-format
+    # exemption exists in the server.)
+    if urf not in _base_columns(ds):
+        if not ds.field_names:
+            detail = "but <fieldNames> is empty, so no column matches"
+        else:
+            detail = "but it is not one of the columns in <fieldNames>"
+        report.error("urf-not-a-column",
+                     f'Sorry, the field "{urf}" doesn\'t exist in the dataset: the unique record '
+                     f"field must be an existing dataset column, {detail}. For long format, use "
+                     "the dataset column the joining field maps into (not the bare form field).",
+                     "definition/uniqueRecordField")
 
 
 def _validate_data_links(ds: Dataset, forms: dict[str, list[FormField]], report: Report) -> None:
@@ -984,10 +1075,14 @@ def _validate_data_links(ds: Dataset, forms: dict[str, list[FormField]], report:
             report.error("datalink-type-enum",
                          f"{loc}: <dataLinkType> is {dl.link_type!r}; must be INCOMING or OUTGOING.",
                          loc)
-        if dl.link_state is not None and dl.link_state and dl.link_state not in DATALINK_STATES:
+        if dl.link_state is not None and dl.link_state not in DATALINK_STATES:
             report.error("datalink-state-enum",
-                         f"{loc}: <dataLinkState> is {dl.link_state!r}; must be ENABLED or DISABLED.",
-                         loc)
+                         f"{loc}: <dataLinkState> is {dl.link_state!r}; must be ENABLED or DISABLED "
+                         "(an empty element is rejected too).", loc)
+        if dl.link_format is not None and dl.link_format != "" and not re.match(r"^[+-]?\d+$", dl.link_format):
+            report.error("datalink-format-integer",
+                         f"{loc}: <dataLinkFormat> is {dl.link_format!r}; must be an integer "
+                         "(0 for wide, 1 for long).", loc)
 
         if dl.field_map_error:
             report.error("fieldmap-json",
@@ -1047,6 +1142,17 @@ def _validate_field_map(ds: Dataset, dl: DataLink, report: Report, loc: str) -> 
     # SCTO-15074: a form field or dataset field must not be mapped twice.
     _flag_duplicates(form_fields, report, loc, "form field")
     _flag_duplicates(dataset_fields, report, loc, "dataset field")
+
+    # The dataset column a field publishes into is also subject to the 60-char
+    # limit; the server rejects an over-long destination on import.
+    for df in dataset_fields:
+        if df is None:
+            continue
+        df_base = df[:-1] if df.endswith("*") else df
+        if len(df_base) > MAX_FIELD_NAME_LENGTH:
+            report.error("fieldmap-dataset-field-too-long",
+                         f"{loc}: dataset field names cannot be longer than "
+                         f"{MAX_FIELD_NAME_LENGTH} characters. Conflicting field: {df_base!r}.", loc)
 
     # updateLogicAction enum.
     for ff, _df, action in dl.field_map:
@@ -1223,8 +1329,11 @@ def _verify_offline_only(ds: Dataset, report: Report) -> None:
         report.cannot_verify("formlinks-exist",
                              "Cannot verify that forms in <formLinks> are deployed on the server. "
                              "Deploy them before uploading this definition.", "definition/formLinks")
-    if ds.allow_offline_updates and ds.allow_offline_updates.lower() == "true":
-        if not ds.unique_record_field:
+    if _xsd_boolean_is_true(ds.allow_offline_updates):
+        # The server resolves the unique record field to 'id' for cases/enumerator
+        # datasets before this check, so it only rejects DATA datasets that enable
+        # offline updates without a unique record field.
+        if not ds.unique_record_field and not _urf_forced_to_id(ds):
             report.error("offline-requires-urf",
                          "You can't enable offline updates for a dataset without a unique record "
                          "field. The server rejects this on upload.",
