@@ -18,12 +18,12 @@ description: >
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
-  version: "1.0.0-beta.5"
+  version: "1.0.0-beta.6"
 ---
 
 # SurveyCTO Form, Plug-in, and Dataset Authoring
 
-**Skill version: 1.0.0-beta.5.** SurveyCTO MCP tool responses publish the current skill-version policy: `start_xlsform_session` returns a `skill_advisory`, and `get_surveycto_mcp_capabilities` returns `intended_skill.versions`. When you see one, compare it against this skill's version above (semantic-version ordering, pre-release aware) and act: if this version is below the response's `deprecated_below_version`, warn the user that their installed SurveyCTO skill is deprecated and should be updated now from the response's `download_url`; if it is below `recommended_min_version`, mention a newer version is available and offer to help update. Say nothing about versions when this skill is current, and raise it at most once per conversation. Skills do not auto-update, so this is the only update signal users get. See [`references/mcp.md`](references/mcp.md) for the exact comparison rules.
+**Skill version: 1.0.0-beta.6.** SurveyCTO MCP tool responses publish the current skill-version policy: `start_xlsform_session` returns a `skill_advisory`, and `get_surveycto_mcp_capabilities` returns `intended_skill.versions`. When you see one, compare it against this skill's version above (semantic-version ordering, pre-release aware) and act: if this version is below the response's `deprecated_below_version`, warn the user that their installed SurveyCTO skill is deprecated and should be updated now from the response's `download_url`; if it is below `recommended_min_version`, mention a newer version is available and offer to help update. Say nothing about versions when this skill is current, and raise it at most once per conversation. Skills do not auto-update, so this is the only update signal users get. See [`references/mcp.md`](references/mcp.md) for the exact comparison rules.
 
 SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
@@ -260,6 +260,14 @@ The template provides:
 
 Adding a language, updating translations after the source changes, or verifying existing translations is its own workflow. **Read [`references/translation.md`](references/translation.md) before starting** — don't improvise from the column-convention sketch in [`references/xlsform.md`](references/xlsform.md).
 
+#### Workflow: translate user data (responses, comments, transcriptions)
+
+Translating collected data (open-ended responses, enumerator notes, audio transcriptions) in a CSV export is a different workflow from form-label translation: the data is high-volume and sensitive, so it must never enter the conversation or logs. Instead, a shipped script sends it directly to Google Cloud Translation and writes the result to disk. The credential is a Google service-account file whose contents you must never read. **Read [`references/google-cloud-credentials.md`](references/google-cloud-credentials.md) and [`references/user-data-translation.md`](references/user-data-translation.md) before starting.** Always estimate cost and get explicit user confirmation before any paid API call.
+
+#### Workflow: transcribe audio (audio audits, voice responses)
+
+Transcribing SurveyCTO audio captures into text uses Google Cloud Speech-to-Text and the same credential handling as user-data translation. The audio is sensitive and must not pass through the conversation; a shipped script sends it to the API and writes a transcripts CSV. **Read [`references/google-cloud-credentials.md`](references/google-cloud-credentials.md) and [`references/audio-transcription.md`](references/audio-transcription.md) before starting.** Estimate cost and confirm before transcribing.
+
 #### Workflow: convert a form from another platform
 
 Converting a form definition exported from another data collection platform — KoboToolbox or ODK (XLSForm `.xlsx`), CommCare (XForms `.xml`), Qualtrics (`.qsf` JSON), or anything else — into a SurveyCTO XLSForm is its own workflow. Note that the conversion is **best-effort and agent-driven**, and the SurveyCTO MCP XLSForm tools work **only on SurveyCTO-shaped XLSForms** (do not point them at the source file). **Read [`references/form-conversion.md`](references/form-conversion.md) before starting**, then load the matching platform-specific reference (`form-conversion-qualtrics.md`, `form-conversion-kobo.md`, `form-conversion-odk.md`, `form-conversion-commcare.md`) if one exists for the source platform; for platforms without a dedicated reference, the base workflow still applies.
@@ -463,6 +471,9 @@ In the dataset XML, add a `<dataLink>` with:
 | [`references/overview.md`](references/overview.md) | First — orientation, file types, how they fit together |
 | [`references/xlsform.md`](references/xlsform.md) | **Mandatory before any XLSForm work** — column conventions, expressions, groups/repeats, multi-language |
 | [`references/translation.md`](references/translation.md) | Adding, updating, or verifying form-label translations — workflow, preserve-verbatim rules, glossary handling, self-review, back-translation spot check, verification checklist |
+| [`references/google-cloud-credentials.md`](references/google-cloud-credentials.md) | **Mandatory before user-data translation or audio transcription.** Google service-account handling, the "never read the credentials file" mandate, and user-coaching for Google Cloud setup |
+| [`references/user-data-translation.md`](references/user-data-translation.md) | Translating collected data (responses, comments, transcriptions) in a CSV via Google Cloud Translation. Cost gate, PII warning, caching, skip-list, glossary, output columns |
+| [`references/audio-transcription.md`](references/audio-transcription.md) | Transcribing audio captures (audio audits, voice responses) via Google Cloud Speech-to-Text. Cost gate, PII warning, caching, size/format notes |
 | [`references/form-conversion.md`](references/form-conversion.md) | **Mandatory before any form conversion** — platform-agnostic workflow for converting form definitions from other data collection platforms into SurveyCTO XLSForms, including the universal mapping concerns, the conversion-report contract, and pointers to platform-specific references |
 | [`references/form-conversion-qualtrics.md`](references/form-conversion-qualtrics.md) | Converting a Qualtrics `.qsf` JSON export — `.qsf` anatomy, question-type / selector mapping, display-logic translation, flow/branch handling, gotchas |
 | [`references/form-conversion-kobo.md`](references/form-conversion-kobo.md) | Converting a KoboToolbox XLSForm `.xlsx` — expression rewrites, Kobo-specific extensions (`kobo--matrix`, `kobo--score`, `kobo--rank`), settings differences |
