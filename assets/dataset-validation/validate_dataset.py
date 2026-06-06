@@ -1274,7 +1274,9 @@ def _validate_field_map(ds: Dataset, dl: DataLink, report: Report, loc: str) -> 
                              f"field {effective_urf}, so that the appropriate row can be updated.", loc)
 
     # The unique record field must be mapped by some entry (console publishing rule).
-    if effective_urf and dl.link_type == "INCOMING":
+    # An entirely empty field map is already reported by fieldmap-empty, so only
+    # flag a non-empty map that omits the unique record column.
+    if effective_urf and dl.link_type == "INCOMING" and field_map:
         if not any((df or "").rstrip("*") == effective_urf for df in dataset_fields):
             report.error("urf-not-mapped",
                          f"{loc}: because the {effective_urf} field is the unique ID field for this "
