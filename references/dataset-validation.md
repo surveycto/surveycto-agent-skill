@@ -107,24 +107,36 @@ your situational awareness so you can pre-empt the common mistakes.
 - `CLIENT` and `REPORT` are never authored: `CLIENT` (desktop) datasets are no
   longer supported and `REPORT` datasets are system-managed. Emit `SERVER`.
 
-### idFormatOptions, for enumerator datasets (errors)
+### Effective discriminator (inferred)
 
-- An enumerator dataset (`<discriminator>ENUMERATORS</discriminator>`) requires
-  `<idFormatOptions>` with at least `<numberOfDigits>`.
-- `prefix` and `suffix` must be alphanumeric only and at most 10 characters. A
-  value like `ENU-` is rejected for the hyphen.
-- `numberOfDigits` must be an integer from 4 to 8 (default 6).
-- `<idFormatOptions>` on a non-enumerator dataset is ignored (recommendation).
+The server infers the discriminator from the option blocks present, overriding a
+conflicting `<discriminator>`: `<caseManagementOptions>` forces CASES, otherwise
+`<idFormatOptions>` forces ENUMERATORS, otherwise the declared `<discriminator>`
+(or DATA). A definition whose declared discriminator disagrees with the inferred
+one gets a warning, because the inferred one is what actually applies.
 
-### caseManagementOptions, for cases datasets (errors)
+### idFormatOptions, for enumerator datasets
 
-- A cases dataset requires `<caseManagementOptions>` with `displayMode`,
-  `showFinalizedSentWhenTree`, and `showColumnsWhenTable`.
-- `displayMode` must be `tree` or `table`.
+- When an enumerator dataset omits `<idFormatOptions>`, the server defaults it to
+  6 digits with no prefix or suffix (warning, not an error: add the block to
+  control the ID format).
+- When present, `<idFormatOptions>` must contain `<numberOfDigits>` (error).
+- `prefix` and `suffix` must be alphanumeric only and at most 10 characters
+  (error). A value like `ENU-` is rejected for the hyphen. Unicode letters are
+  allowed (the server uses a Unicode alphanumeric check here).
+- `numberOfDigits` must be an integer from 4 to 8 (default 6) (error).
+
+### caseManagementOptions, for cases datasets
+
+- When a cases dataset omits `<caseManagementOptions>`, the server defaults it to
+  tree display (warning, not an error: add the block to control display/entry).
+- When present, it must contain `displayMode`, `showFinalizedSentWhenTree`, and
+  `showColumnsWhenTable` (error).
+- `displayMode` must be `tree` or `table` (error).
 - For `table`, `showColumnsWhenTable` must be non-empty and must include the
-  `id` column.
-- `otherUserCode`, when present, must be latin alphanumeric (letters and digits
-  only).
+  `id` column (error).
+- `otherUserCode`, when present, must be latin alphanumeric (ASCII letters and
+  digits only) (error).
 
 ### Standard columns
 
@@ -154,6 +166,8 @@ your situational awareness so you can pre-empt the common mistakes.
   or `CONCATENATE_TO_TEXT`.
 - A `joiningField` must be present in the field map (error). When the joining
   field is mapped, its entry must use `REPLACE` (error).
+- Long-format publishing (`<dataLinkFormat>1</dataLinkFormat>`) requires a
+  `<joiningField>` (error).
 - For wide-format incoming links into a dataset with a `uniqueRecordField`, the
   joining field should map to the unique record column, and the unique record
   column should be mapped by some entry (warnings; these are console-level
@@ -170,10 +184,16 @@ metadata fields the server always publishes (`SubmissionDate`, `formdef_version`
 
 - Every form field named in the map exists in the form (error if not).
 - A field that is repeated in the form must carry `*` on both sides of its map
-  entry; a non-repeated field must not (error on mismatch).
+  entry; a non-repeated field must not (error on mismatch in wide format).
 - The joining field exists in the form (error if not), and for long format it
   must be inside a repeat group (error if not).
+- For long format, every published field (and the relevance field) must be in the
+  same repeat instance as the joining field, in a parent group, or outside all
+  groups. A field from a different, sibling repeat group does not qualify (error).
 - The relevance field, when set, exists in the form (warning if not).
+- `<linkObjectId>` should equal the form's `form_id` (read from the form's
+  settings sheet), not the file name. A mismatch with a supplied form is a
+  warning.
 
 ## What the validator cannot check
 

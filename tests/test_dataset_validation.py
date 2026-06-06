@@ -205,12 +205,28 @@ def test_bad_discriminator():
 # ---------------------------------------------------------------------------
 
 @test
-def test_enumerator_requires_id_format():
+def test_enumerator_missing_id_format_is_warning():
+    # The server defaults idFormatOptions, so its absence is a warning, not an error.
     r = _run_xml(_wrap(
         "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
         "<fieldNames>id,name,users</fieldNames><discriminator>ENUMERATORS</discriminator>"
         "<uniqueRecordField>id</uniqueRecordField>"))
-    _expect("idformat-required-enum" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+    _expect(not r.has_errors, f"missing idFormatOptions should not be an error: {_codes(r, vd.ERROR)}")
+    _expect("idformat-default-enum" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_idformat_presence_infers_enumerator_and_validates():
+    # <idFormatOptions> with discriminator DATA: the server treats this as an
+    # ENUMERATORS dataset, so the bad prefix is validated and a discriminator
+    # inference warning is raised.
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames>"
+        "<idFormatOptions><prefix>BAD-</prefix><numberOfDigits>6</numberOfDigits></idFormatOptions>"
+        "<discriminator>DATA</discriminator>"))
+    _expect("idformat-prefix" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+    _expect("discriminator-inferred" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
 
 
 @test
@@ -552,6 +568,76 @@ def test_conditional_metadata_field_is_warning_not_error():
     r = _run_xml(_with_data_link(fm), forms=[form])
     _expect("fieldmap-form-field-missing" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
     _expect("fieldmap-conditional-meta" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_long_format_requires_joining_field():
+    fm = '[{"formField":"a*","datasetField":"key*"}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
+        f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap></dataLink></dataLinks>")
+    r = _run_xml(xml)
+    _expect("long-format-requires-joining" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_long_format_sibling_repeat_field_rejected():
+    # A field from a different (sibling) repeat than the joining field does not qualify.
+    form = _make_form([
+        ("begin repeat", "repA"), ("text", "a_id"), ("text", "a_val"), ("end repeat", "repA"),
+        ("begin repeat", "repB"), ("text", "b_val"), ("end repeat", "repB"),
+    ])
+    fm = ('[{"formField":"a_id*","datasetField":"id*","updateLogicAction":"REPLACE"},'
+          '{"formField":"b_val*","datasetField":"b_val*","updateLogicAction":"REPLACE"}]')
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>id,b_val</fieldNames>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
+        f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap>"
+        "<joiningField>a_id*</joiningField></dataLink></dataLinks>")
+    r = _run_xml(xml, forms=[form])
+    _expect("long-format-field-scope" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_link_object_id_must_match_form_id():
+    # The form declares form_id 'real_form_id'; linkObjectId uses the file stem.
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "survey"
+    ws.append(["type", "name", "label"])
+    ws.append(["text", "f1", "f1"])
+    ws.append(["text", "key_src", "key_src"])
+    st = wb.create_sheet("settings")
+    st.append(["form_title", "form_id"])
+    st.append(["My Form", "real_form_id"])
+    wb.create_sheet("choices")
+    import tempfile as _tf
+    fh = _tf.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    path = fh.name
+    fh.close()
+    wb.save(path)
+    fm = '[{"formField":"key_src","datasetField":"key"}]'
+    xml = _with_data_link(fm)  # linkObjectId is 'f1'
+    r = _run_xml(xml, forms=[path])
+    _expect("linkobject-formid-mismatch" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_incoming_form_link_flags_streaming_and_form_exists():
+    fm = '[{"formField":"a","datasetField":"key"}]'
+    r = _run_xml(_with_data_link(fm))
+    codes = _codes(r, vd.CANNOT_VERIFY)
+    _expect("streaming-license" in codes, codes)
+    _expect("form-exists" in codes, codes)
+
+
+@test
+def test_id_collision_surfaced_as_cannot_verify():
+    r = _run_xml(VALID_DATA)
+    _expect("id-collision" in _codes(r, vd.CANNOT_VERIFY), _codes(r, vd.CANNOT_VERIFY))
 
 
 @test

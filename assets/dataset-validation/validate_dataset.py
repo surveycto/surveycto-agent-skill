@@ -255,15 +255,31 @@ class Report:
 # ---------------------------------------------------------------------------
 
 class FormField:
-    def __init__(self, name: str, ftype: str, repeated: bool, metadata: bool = False) -> None:
+    def __init__(self, name: str, ftype: str, repeat_path: tuple = (), metadata: bool = False) -> None:
         self.name = name
         self.type = ftype
-        self.repeated = repeated
+        # Names of the repeat groups enclosing this field, outermost first. A
+        # field is repeated when this is non-empty; the path is what long-format
+        # scope validation compares against the joining field's repeat path.
+        self.repeat_path = tuple(repeat_path)
         self.metadata = metadata
+
+    @property
+    def repeated(self) -> bool:
+        return bool(self.repeat_path)
 
     def as_dict(self) -> dict:
         return {"name": self.name, "type": self.type,
                 "repeated": self.repeated, "metadata": self.metadata}
+
+
+class FormInfo:
+    """A parsed form: its publishable fields plus its declared form_id (from the
+    settings sheet), used to match a dataLink's linkObjectId to the real form."""
+
+    def __init__(self, fields: list, form_id: Optional[str] = None) -> None:
+        self.fields = fields
+        self.form_id = form_id
 
 
 def _xlsform_type(raw_type: str) -> str:
@@ -319,8 +335,9 @@ def extract_form_fields(xlsx_path: str) -> list[FormField]:
         name_idx = header_map["name"]
 
         fields: list[FormField] = []
-        # Stack of "group" | "repeat" for the open containers above the current row.
-        stack: list[str] = []
+        # Stack of (kind, name) for the open containers above the current row,
+        # where kind is "group" or "repeat".
+        stack: list[tuple] = []
 
         for row in rows:
             raw_type = _cell(row, type_idx)
@@ -328,10 +345,10 @@ def extract_form_fields(xlsx_path: str) -> list[FormField]:
             token = raw_type.strip().lower()
 
             if token in ("begin group", "begin_group"):
-                stack.append("group")
+                stack.append(("group", name.strip()))
                 continue
             if token in ("begin repeat", "begin_repeat"):
-                stack.append("repeat")
+                stack.append(("repeat", name.strip()))
                 continue
             if token in ("end group", "end_group", "end repeat", "end_repeat"):
                 if stack:
@@ -344,11 +361,47 @@ def extract_form_fields(xlsx_path: str) -> list[FormField]:
             if not name.strip():
                 continue
 
-            repeated = "repeat" in stack
-            fields.append(FormField(name.strip(), _xlsform_type(raw_type), repeated, metadata=False))
+            repeat_path = tuple(n for kind, n in stack if kind == "repeat")
+            fields.append(FormField(name.strip(), _xlsform_type(raw_type), repeat_path, metadata=False))
     finally:
         wb.close()
     return _with_metadata(fields)
+
+
+def load_form(xlsx_path: str) -> FormInfo:
+    """Parse a form into a FormInfo (publishable fields plus its declared
+    form_id from the settings sheet)."""
+    fields = extract_form_fields(xlsx_path)
+    return FormInfo(fields, _read_form_id(xlsx_path))
+
+
+def _read_form_id(xlsx_path: str) -> Optional[str]:
+    try:
+        from openpyxl import load_workbook
+    except ImportError:  # pragma: no cover
+        return None
+    try:
+        wb = load_workbook(filename=xlsx_path, read_only=True, data_only=True)
+    except Exception:  # noqa: BLE001 - form_id is best-effort
+        return None
+    try:
+        if "settings" not in wb.sheetnames:
+            return None
+        rows = wb["settings"].iter_rows(values_only=True)
+        try:
+            header = next(rows)
+        except StopIteration:
+            return None
+        cols = {str(c).strip().lower(): i for i, c in enumerate(header) if c is not None}
+        if "form_id" not in cols:
+            return None
+        idx = cols["form_id"]
+        for row in rows:
+            if idx < len(row) and row[idx] not in (None, ""):
+                return str(row[idx]).strip()
+        return None
+    finally:
+        wb.close()
 
 
 # A single XLSForm worksheet entry should never legitimately decompress to this
@@ -371,7 +424,7 @@ def _guard_xlsx_zip_bomb(xlsx_path: str) -> None:
 
 def _with_metadata(fields: list[FormField]) -> list[FormField]:
     existing = {f.name for f in fields}
-    meta = [FormField(n, t, False, metadata=True) for n, t in METADATA_FIELDS if n not in existing]
+    meta = [FormField(n, t, (), metadata=True) for n, t in METADATA_FIELDS if n not in existing]
     return fields + meta
 
 
@@ -683,6 +736,23 @@ def _validate_type_and_discriminator(ds: Dataset, report: Report) -> None:
                      f"<discriminator> is {ds.discriminator!r}; must be one of "
                      f"{', '.join(sorted(DISCRIMINATORS))}.", "definition/discriminator")
 
+    # The server infers the discriminator from the option blocks present and
+    # ignores a conflicting <discriminator>. Flag the mismatch so the author is
+    # not surprised that, e.g., a definition with <idFormatOptions> is treated as
+    # an enumerator dataset regardless of what <discriminator> says.
+    eff = effective_discriminator(ds)
+    if ds.discriminator and ds.discriminator in DISCRIMINATORS and ds.discriminator != eff:
+        if eff == "CASES":
+            reason = "<caseManagementOptions> is present, which forces CASES"
+        elif eff == "ENUMERATORS":
+            reason = "<idFormatOptions> is present, which forces ENUMERATORS"
+        else:
+            reason = "no option block is present"
+        report.warning("discriminator-inferred",
+                       f"The declared <discriminator>{ds.discriminator}</discriminator> is "
+                       f"overridden: {reason}, so the server treats this as a {eff} dataset.",
+                       "definition/discriminator")
+
 
 def _validate_field_names(ds: Dataset, report: Report) -> None:
     seen: set[str] = set()
@@ -703,38 +773,39 @@ def _validate_field_names(ds: Dataset, report: Report) -> None:
         seen.add(base)
 
 
+def effective_discriminator(ds: Dataset) -> str:
+    """The discriminator the server infers on import (getDatasetDiscriminator).
+
+    The presence of an option block overrides the declared <discriminator>:
+    <caseManagementOptions> forces CASES; otherwise <idFormatOptions> forces
+    ENUMERATORS; otherwise the declared <discriminator> (or DATA) is used.
+    """
+    if ds.case_mgmt is not None or ds.discriminator == "CASES":
+        return "CASES"
+    if ds.id_format is not None or ds.discriminator == "ENUMERATORS":
+        return "ENUMERATORS"
+    return "DATA"
+
+
 def _is_enumerators(ds: Dataset) -> bool:
-    return ds.discriminator == "ENUMERATORS"
+    return effective_discriminator(ds) == "ENUMERATORS"
 
 
 def _is_cases(ds: Dataset) -> bool:
-    # Mirror looksLikeCasesDataset: discriminator, id == "cases", or the standard
-    # column signature (>=6 cols including id,label,formids,users,roles,sortby).
-    if ds.discriminator == "CASES":
-        return True
-    # The server compares the id case-sensitively against the literal "cases".
-    if (ds.id or "") == "cases":
-        return True
-    cols = {c[:-1] if c.endswith("*") else c for c in ds.field_names}
-    signature = {"id", "label", "formids", "users", "roles", "sortby"}
-    return len(ds.field_names) >= 6 and signature.issubset(cols)
+    return effective_discriminator(ds) == "CASES"
 
 
 def _validate_id_format(ds: Dataset, report: Report) -> None:
     fmt = ds.id_format
-    is_enum = _is_enumerators(ds)
     if fmt is None:
-        if is_enum:
-            report.error("idformat-required-enum",
-                         "The ID format options are required for an enumerator dataset. "
-                         "Add <idFormatOptions> with at least <numberOfDigits>.",
-                         "definition/idFormatOptions")
+        # The server defaults idFormatOptions (6 digits, no prefix/suffix) when an
+        # enumerator dataset omits the block, so this is a warning, not a rejection.
+        if _is_enumerators(ds):
+            report.warning("idformat-default-enum",
+                           "This enumerator dataset has no <idFormatOptions>; the server will "
+                           "default to 6 digits with no prefix or suffix. Add <idFormatOptions> "
+                           "to control the generated ID format.", "definition/idFormatOptions")
         return
-
-    if not is_enum:
-        report.recommend("idformat-ignored",
-                         "<idFormatOptions> only applies to enumerator datasets and is "
-                         "ignored here.", "definition/idFormatOptions")
 
     children = fmt.get("_children", [])
     if "numberOfDigits" not in children:
@@ -742,41 +813,49 @@ def _validate_id_format(ds: Dataset, report: Report) -> None:
                      "<idFormatOptions> must contain <numberOfDigits>.",
                      "definition/idFormatOptions")
 
-    # Value rules. The server applies these for enumerator datasets; for other
-    # discriminators idFormatOptions is ignored, so only enforce there.
-    if is_enum:
-        prefix = fmt.get("prefix", "") or ""
-        suffix = fmt.get("suffix", "") or ""
-        if prefix and (len(prefix) > 10 or not _is_unicode_alnum(prefix)):
-            report.error("idformat-prefix",
-                         "Prefix can contain alphanumeric characters only and shouldn't "
-                         f"exceed 10 characters. Got: {prefix!r}.", "definition/idFormatOptions")
-        if suffix and (len(suffix) > 10 or not _is_unicode_alnum(suffix)):
-            report.error("idformat-suffix",
-                         "Suffix can contain alphanumeric characters only and shouldn't "
-                         f"exceed 10 characters. Got: {suffix!r}.", "definition/idFormatOptions")
-        digits = fmt.get("numberOfDigits")
-        if digits not in (None, ""):
-            try:
-                n = int(digits)
-                if n < 4 or n > 8:
-                    report.error("idformat-digits-range",
-                                 "Number of digits can't be less than 4 or higher than 8. "
-                                 f"Got: {n}.", "definition/idFormatOptions")
-            except ValueError:
-                report.error("idformat-digits-number",
-                             f"Number of digits should be a number. Got: {digits!r}.",
-                             "definition/idFormatOptions")
+    # idFormatOptions present normally forces ENUMERATORS; the only way it is not
+    # an enumerator dataset is when caseManagementOptions is also present (CASES
+    # wins), in which case the server ignores idFormatOptions entirely.
+    if not _is_enumerators(ds):
+        report.recommend("idformat-ignored",
+                         "<idFormatOptions> is ignored because <caseManagementOptions> makes "
+                         "this a cases dataset.", "definition/idFormatOptions")
+        return
+
+    prefix = fmt.get("prefix", "") or ""
+    suffix = fmt.get("suffix", "") or ""
+    if prefix and (len(prefix) > 10 or not _is_unicode_alnum(prefix)):
+        report.error("idformat-prefix",
+                     "Prefix can contain alphanumeric characters only and shouldn't "
+                     f"exceed 10 characters. Got: {prefix!r}.", "definition/idFormatOptions")
+    if suffix and (len(suffix) > 10 or not _is_unicode_alnum(suffix)):
+        report.error("idformat-suffix",
+                     "Suffix can contain alphanumeric characters only and shouldn't "
+                     f"exceed 10 characters. Got: {suffix!r}.", "definition/idFormatOptions")
+    digits = fmt.get("numberOfDigits")
+    if digits not in (None, ""):
+        try:
+            n = int(digits)
+            if n < 4 or n > 8:
+                report.error("idformat-digits-range",
+                             "Number of digits can't be less than 4 or higher than 8. "
+                             f"Got: {n}.", "definition/idFormatOptions")
+        except ValueError:
+            report.error("idformat-digits-number",
+                         f"Number of digits should be a number. Got: {digits!r}.",
+                         "definition/idFormatOptions")
 
 
 def _validate_case_mgmt(ds: Dataset, report: Report) -> None:
     cm = ds.case_mgmt
-    is_cases = _is_cases(ds)
     if cm is None:
-        if ds.discriminator == "CASES":
-            report.error("casemgmt-required",
-                         "The cases management options are required for a cases dataset. "
-                         "Add <caseManagementOptions>.", "definition/caseManagementOptions")
+        # The server defaults caseManagementOptions (tree display) when a cases
+        # dataset omits the block, so this is a warning, not a rejection.
+        if _is_cases(ds):
+            report.warning("casemgmt-default",
+                           "This cases dataset has no <caseManagementOptions>; the server will "
+                           "default to tree display. Add <caseManagementOptions> to control the "
+                           "display mode and entry mode.", "definition/caseManagementOptions")
         return
 
     children = cm.get("_children", [])
@@ -916,19 +995,49 @@ def _validate_data_links(ds: Dataset, forms: dict[str, list[FormField]], report:
                          loc)
             continue
 
+        form_obj = _resolve_form(dl.link_object_id, forms)
+
         if dl.field_map is not None:
-            _validate_field_map(ds, dl, forms, report, loc)
+            _validate_field_map(ds, dl, report, loc)
+            if form_obj is not None:
+                _cross_reference_form(ds, dl, form_obj.fields, report, loc)
+            elif forms:
+                report.recommend("form-not-supplied",
+                                 f"{loc}: no form file was supplied for {dl.link_object_id!r}, so "
+                                 "field names in the map were not checked against the form.", loc)
+
+        # The linkObjectId must be the deployed form's form_id, not its file name.
+        if (form_obj is not None and form_obj.form_id and dl.link_object_id
+                and form_obj.form_id != dl.link_object_id):
+            report.warning("linkobject-formid-mismatch",
+                           f"{loc}: <linkObjectId> is {dl.link_object_id!r}, but the supplied "
+                           f"form's form_id is {form_obj.form_id!r}. The link must reference the "
+                           "deployed form's ID (the form_id in its settings sheet), not the file "
+                           "name.", loc, fix=f"Set <linkObjectId>{form_obj.form_id}</linkObjectId>.")
 
         if dl.link_object_id:
             report.cannot_verify("form-exists",
-                                 f"{loc}: cannot verify that linked object {dl.link_object_id!r} "
-                                 "is deployed on the server. Deploy referenced forms first.", loc)
+                                 f"{loc}: cannot verify offline that {dl.link_object_id!r} is "
+                                 "deployed. <linkObjectId> must equal the form's form_id (from its "
+                                 "settings sheet), and that form must be deployed before this "
+                                 "definition is uploaded.", loc)
+
+    # The streaming license is a dataset-level capability, so note it once.
+    if any(dl.link_class == "FORM" and dl.link_type == "INCOMING" for dl in ds.data_links):
+        report.cannot_verify("streaming-license",
+                             "Publishing form submissions into a dataset requires a subscription "
+                             "that supports streaming into server datasets; this cannot be "
+                             "verified offline.", "definition/dataLinks")
 
 
-def _validate_field_map(ds: Dataset, dl: DataLink, forms: dict[str, list[FormField]],
-                        report: Report, loc: str) -> None:
+def _validate_field_map(ds: Dataset, dl: DataLink, report: Report, loc: str) -> None:
     form_fields = [t[0] for t in dl.field_map]
     dataset_fields = [t[1] for t in dl.field_map]
+
+    if dl.is_long_format and not dl.joining_field:
+        report.error("long-format-requires-joining",
+                     f"{loc}: long-format publishing (dataLinkFormat 1) requires a <joiningField> "
+                     "from the repeat group to identify unique records.", loc)
 
     if any(f is None for f in form_fields) or any(d is None for d in dataset_fields):
         report.error("fieldmap-shape",
@@ -991,15 +1100,6 @@ def _validate_field_map(ds: Dataset, dl: DataLink, forms: dict[str, list[FormFie
                            f"{loc}: the unique record field {urf!r} is not mapped by any entry. "
                            "An incoming form link must publish into the unique ID column.", loc)
 
-    # Cross-reference against the form's real fields when available.
-    form_obj = _resolve_form(dl.link_object_id, forms)
-    if form_obj is not None:
-        _cross_reference_form(ds, dl, form_obj, report, loc)
-    elif forms:
-        report.recommend("form-not-supplied",
-                         f"{loc}: no form file was supplied for {dl.link_object_id!r}, so field "
-                         "names in the map were not checked against the form.", loc)
-
 
 def _flag_duplicates(values: list, report: Report, loc: str, label: str) -> None:
     seen: set = set()
@@ -1018,21 +1118,34 @@ def _flag_duplicates(values: list, report: Report, loc: str, label: str) -> None
 
 
 def _resolve_form(link_object_id: Optional[str],
-                  forms: dict[str, list[FormField]]) -> Optional[list[FormField]]:
+                  forms: dict) -> Optional["FormInfo"]:
     if not link_object_id or not forms:
         return None
+    # Prefer matching the form's declared form_id (the deployed link target).
+    for fi in forms.values():
+        if fi.form_id and fi.form_id == link_object_id:
+            return fi
+    # Then the file stem (common when the file is named after the form id).
     if link_object_id in forms:
         return forms[link_object_id]
-    # Allow a single supplied form to match regardless of id, to ease the common
-    # one-form case where the file stem may differ from the form_id.
+    # Finally, a single supplied form matches regardless of id, to ease the
+    # common one-form case where the file name differs from the form id.
     if len(forms) == 1:
         return next(iter(forms.values()))
     return None
 
 
-def _cross_reference_form(ds: Dataset, dl: DataLink, form_fields: list[FormField],
+def _cross_reference_form(ds: Dataset, dl: DataLink, form_fields: list,
                           report: Report, loc: str) -> None:
     by_name = {f.name: f for f in form_fields}
+
+    joining = dl.joining_field
+    jbase = (joining[:-1] if joining.endswith("*") else joining) if joining else None
+    jfield = by_name.get(jbase) if jbase else None
+    # Repeat groups enclosing the joining field. In long format, every published
+    # field must sit in this same set of repeats (or fewer): a field inside a
+    # repeat that does not also enclose the joining field does not qualify.
+    j_repeats = set(jfield.repeat_path) if jfield else set()
 
     for ff, _df, _a in dl.field_map:
         if ff is None:
@@ -1056,14 +1169,26 @@ def _cross_reference_form(ds: Dataset, dl: DataLink, form_fields: list[FormField
                          f"{loc}: {base!r} is inside a repeat group in the form, so it must carry "
                          "a '*' suffix on both formField and datasetField.", loc)
         if not field.repeated and ff.endswith("*"):
-            report.error("fieldmap-repeat-suffix-extra",
-                         f"{loc}: {ff!r} has a '*' suffix but {base!r} is not inside a repeat "
-                         "group in the form.", loc)
+            if dl.is_long_format:
+                # The server strips wildcards in long format, so this is not a
+                # rejection, but the '*' is misleading on a non-repeated field.
+                report.warning("fieldmap-repeat-suffix-extra",
+                               f"{loc}: {ff!r} has a '*' suffix but {base!r} is not inside a "
+                               "repeat group; remove the suffix to avoid confusion.", loc)
+            else:
+                report.error("fieldmap-repeat-suffix-extra",
+                             f"{loc}: {ff!r} has a '*' suffix but {base!r} is not inside a repeat "
+                             "group in the form.", loc)
+        # Long-format scope: a published field in a sibling repeat does not qualify.
+        if dl.is_long_format and jfield is not None and not field.metadata:
+            if not set(field.repeat_path).issubset(j_repeats):
+                report.error("long-format-field-scope",
+                             f"{loc}: in long format, every published field must be in the same "
+                             f"repeat instance as the joining field {jbase!r}, in a parent group, "
+                             f"or outside all groups. {base!r} is in a different repeat group and "
+                             "does not qualify.", loc)
 
-    joining = dl.joining_field
     if joining:
-        jbase = joining[:-1] if joining.endswith("*") else joining
-        jfield = by_name.get(jbase)
         if jfield is None:
             report.error("joining-field-form-missing",
                          f"{loc}: the joining field {jbase!r} is not part of the form definition.",
@@ -1075,13 +1200,25 @@ def _cross_reference_form(ds: Dataset, dl: DataLink, form_fields: list[FormField
 
     if dl.relevance_field:
         rbase = dl.relevance_field.rstrip("*")
-        if rbase and rbase not in by_name:
+        rfield = by_name.get(rbase) if rbase else None
+        if rbase and rfield is None:
             report.warning("relevance-field-missing",
                            f"{loc}: the relevance field {rbase!r} is not part of the form "
                            "definition.", loc)
+        elif (dl.is_long_format and jfield is not None and rfield is not None
+              and not set(rfield.repeat_path).issubset(j_repeats)):
+            report.error("long-format-relevance-scope",
+                         f"{loc}: in long format, the relevance field {rbase!r} must be in the "
+                         f"same repeat instance as the joining field {jbase!r}, in a parent group, "
+                         "or outside all groups.", loc)
 
 
 def _verify_offline_only(ds: Dataset, report: Report) -> None:
+    if ds.id:
+        report.cannot_verify("id-collision",
+                             "Cannot verify offline that the dataset id is not already used by "
+                             "another dataset or reserved by a form on the server. Choose a unique "
+                             "id.", "definition/id")
     if ds.form_links:
         report.cannot_verify("formlinks-exist",
                              "Cannot verify that forms in <formLinks> are deployed on the server. "
@@ -1103,12 +1240,12 @@ def _verify_offline_only(ds: Dataset, report: Report) -> None:
 # CLI / output
 # ---------------------------------------------------------------------------
 
-def _load_forms(form_paths: list[str], report: Report) -> dict[str, list[FormField]]:
-    forms: dict[str, list[FormField]] = {}
+def _load_forms(form_paths: list[str], report: Report) -> dict:
+    forms: dict = {}
     for p in form_paths:
         stem = Path(p).stem
         try:
-            forms[stem] = extract_form_fields(p)
+            forms[stem] = load_form(p)
         except Exception as exc:  # noqa: BLE001 - reported as a finding
             report.error("form-parse", f"Could not parse form {p!r}: {exc}", p)
     return forms
@@ -1153,7 +1290,10 @@ def format_text(report: Report) -> str:
         f"{counts[CANNOT_VERIFY]} item(s) needing a live server."
     )
     if not report.has_errors:
-        lines.append("No blocking errors found. Review warnings and recommendations above.")
+        if counts[WARNING] or counts[RECOMMENDATION]:
+            lines.append("No blocking errors found. Review the warnings and recommendations above.")
+        else:
+            lines.append("No blocking errors found.")
     return "\n".join(lines)
 
 
