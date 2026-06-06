@@ -158,7 +158,7 @@ validator before building the dev or release zip.
 | --- | --- |
 | `SKILL.md` | The skill content itself. Loaded by the agent host on activation. |
 | `references/` | Deep-dive reference docs the agent loads on demand. See [`README.md` → Maintaining `references/`](README.md#maintaining-references). |
-| `assets/` | Bundled templates and tools (XLSForm template, field plug-in template, field plug-in test harness). |
+| `assets/` | Bundled templates and tools (XLSForm template, field plug-in template, field plug-in test harness, dataset validator). |
 | `surveycto-skill.zip` | Local-only test zip if you build one. Gitignored, not committed. CI builds and publishes the official release zip on push to `main`. |
 | `README.md` | End-user-facing install/use/maintenance docs. **Excluded from the skill zip.** |
 | `AGENTS.md` | This file. **Excluded from the skill zip.** |
@@ -192,6 +192,11 @@ validator before building the dev or release zip.
 - **Editing the dataset XML or Data Explorer primers** — these are
   source-code-derived (not docs-derived). See [`README.md`
   → Source-code-derived primers](README.md#source-code-derived-primers-bespoke-occasional).
+- **Editing the dataset validator** (`assets/dataset-validation/validate_dataset.py`
+  and `references/dataset-validation.md`) — these are source-code-derived from
+  the SurveyCTO server's dataset create/edit rules. The script header lists the
+  source files behind each rule. Keep the two in sync, and run
+  `python3 tests/test_dataset_validation.py` after any change.
 - **Editing the field plug-in test harness or template** — keep the
   harness zero-dependency and offline-usable. Run `validate.mjs`
   against `assets/field-plugin-template/` after any change.

@@ -18,12 +18,12 @@ description: >
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
-  version: "1.0.0-beta.5"
+  version: "1.0.0-beta.6"
 ---
 
 # SurveyCTO Form, Plug-in, and Dataset Authoring
 
-**Skill version: 1.0.0-beta.5.** SurveyCTO MCP tool responses publish the current skill-version policy: `start_xlsform_session` returns a `skill_advisory`, and `get_surveycto_mcp_capabilities` returns `intended_skill.versions`. When you see one, compare it against this skill's version above (semantic-version ordering, pre-release aware) and act: if this version is below the response's `deprecated_below_version`, warn the user that their installed SurveyCTO skill is deprecated and should be updated now from the response's `download_url`; if it is below `recommended_min_version`, mention a newer version is available and offer to help update. Say nothing about versions when this skill is current, and raise it at most once per conversation. Skills do not auto-update, so this is the only update signal users get. See [`references/mcp.md`](references/mcp.md) for the exact comparison rules.
+**Skill version: 1.0.0-beta.6.** SurveyCTO MCP tool responses publish the current skill-version policy: `start_xlsform_session` returns a `skill_advisory`, and `get_surveycto_mcp_capabilities` returns `intended_skill.versions`. When you see one, compare it against this skill's version above (semantic-version ordering, pre-release aware) and act: if this version is below the response's `deprecated_below_version`, warn the user that their installed SurveyCTO skill is deprecated and should be updated now from the response's `download_url`; if it is below `recommended_min_version`, mention a newer version is available and offer to help update. Say nothing about versions when this skill is current, and raise it at most once per conversation. Skills do not auto-update, so this is the only update signal users get. See [`references/mcp.md`](references/mcp.md) for the exact comparison rules.
 
 SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
@@ -343,6 +343,27 @@ Dataset definitions are XML files with a `<dataset>` root element. They define c
 
 **Full reference (read before any dataset XML work)**: [`references/datasets-xml.md`](references/datasets-xml.md).
 
+### Validate before delivering a dataset
+
+After you create or edit any dataset definition XML, **validate it and
+self-correct before handing it to the user.** The skill bundles a dataset
+validator that re-implements the rules the SurveyCTO server and console enforce
+(element order, enumerations, `idFormatOptions` and case-management value rules,
+standard column sets, and the field-map / publishing rules behind issues like a
+joining field missing from the field map or a form field mapped twice). Run it
+from the skill root:
+
+```
+python3 assets/dataset-validation/validate_dataset.py path/to/dataset.xml --form path/to/form.xlsx
+```
+
+Supply each referenced form `.xlsx` with `--form` so the field map is checked
+against the form's real fields. Fix every `error`, then re-run until clean; apply
+`warning`/`recommendation` items unless the user asked otherwise; and surface the
+`cannot_verify` items (form deployment, data uniqueness, license) to the user.
+**Read [`references/dataset-validation.md`](references/dataset-validation.md) for
+the workflow, the rule inventory, and the offline limits.**
+
 ## Data Explorer workbook definitions
 
 Data Explorer workbooks are XLSX files with four worksheets: `summaries`, `settings`, `global_filters`, `global_exclusions`.
@@ -470,6 +491,7 @@ In the dataset XML, add a `<dataLink>` with:
 | [`references/form-conversion-commcare.md`](references/form-conversion-commcare.md) | Converting a CommCare XForms `.xml` export — XForms anatomy, parsing helper, itext → `label:Lang`, case-management caveats |
 | [`references/expressions.md`](references/expressions.md) | Any expression work (relevance, constraint, calculation, choice_filter) |
 | [`references/datasets-xml.md`](references/datasets-xml.md) | Server dataset XML definitions |
+| [`references/dataset-validation.md`](references/dataset-validation.md) | **Run after authoring/editing any dataset XML** — validate the definition against the server's create/edit rules with the bundled `assets/dataset-validation/validate_dataset.py`, then self-correct |
 | [`references/data-explorer.md`](references/data-explorer.md) | Data Explorer dashboards |
 | [`references/field-plugins.md`](references/field-plugins.md) | Field plug-in authoring, packaging, form API, and testing |
 
