@@ -50,10 +50,12 @@ itself; this primer is about checking your output against the server's rules.
    explicitly asked for the non-standard shape (for example, an enumerator
    dataset deliberately without a `users` column). When you keep a flagged
    choice, say so to the user and why.
-6. Note the `cannot_verify` findings out loud to the user. These are real rules
-   the validator cannot check offline (whether referenced forms are deployed,
-   whether a unique ID is actually unique in stored data, subscription/license
-   gates, ID collisions). A clean validator result does not clear these.
+6. Relay the "Before uploading, confirm on the server" checklist to the user.
+   These are real preconditions the validator cannot check offline (whether the
+   referenced forms are deployed and their form_id matches the linkObjectId,
+   whether the dataset id is free, whether a linked enumerator dataset exists,
+   subscription gates). A clean validator result does not clear them, so pass
+   them on as a short pre-upload checklist.
 
 Run the validator yourself; do not ask the user to run it. If your host supports
 sub-agents, validation is a good candidate to delegate, but you own the fixes.
@@ -68,10 +70,14 @@ present, so you can gate on the exit code.
 | `error` | The server or its schema rejects this on upload, or a publishing rule that breaks data collection. | Must fix before delivering. |
 | `warning` | The server accepts the upload, but behavior is degraded, or a console-level publishing rule will reject the configuration when the link is saved or edited. | Fix unless the user asked for it; explain if you keep it. |
 | `recommendation` | Best practice or a console convention that is not enforced. | Apply by default; optional. |
-| `cannot_verify` | A real rule that needs a live server. | Surface to the user; cannot be cleared offline. |
+| `cannot_verify` | A real precondition that needs a live server. | Rendered as one consolidated "Before uploading, confirm on the server" checklist; relay it to the user. Cannot be cleared offline. |
 
-Use `--json` for a machine-readable result (`{"ok", "counts", "findings"}`) when
-you want to branch on specific rule ids.
+The text output lists errors, warnings, and recommendations as tagged lines, then
+the `cannot_verify` items as a single deduplicated checklist (so multiple form
+references collapse into one "deploy these forms" line). Use `--json` for a
+machine-readable result (`{"ok", "counts", "findings"}`), where each
+`cannot_verify` item is still a separate finding, when you want to branch on
+specific rule ids.
 
 ## What the validator checks
 

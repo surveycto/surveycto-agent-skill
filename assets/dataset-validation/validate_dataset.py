@@ -1013,8 +1013,8 @@ def _validate_case_mgmt(ds: Dataset, report: Report) -> None:
 
     if cm.get("enumeratorDatasetId"):
         report.cannot_verify("casemgmt-enum-dataset",
-                             "Cannot verify that the linked enumeratorDatasetId exists and is "
-                             "accessible without a live server.", "definition/caseManagementOptions")
+                             f"Confirm the linked enumerator dataset {cm.get('enumeratorDatasetId')!r} "
+                             "exists and is accessible.", "definition/caseManagementOptions")
 
 
 def _base_columns(ds: Dataset) -> set[str]:
@@ -1181,21 +1181,13 @@ def _validate_data_links(ds: Dataset, forms: dict[str, list[FormField]], report:
                            "deployed form's ID (the form_id in its settings sheet), not the file "
                            "name.", loc, fix=f"Set <linkObjectId>{form_obj.form_id}</linkObjectId>.")
 
-        if dl.link_object_id:
-            report.cannot_verify("form-exists",
-                                 f"{loc}: cannot verify offline that {dl.link_object_id!r} is "
-                                 "deployed. <linkObjectId> must equal the form's form_id (from its "
-                                 "settings sheet), and that form must be deployed before this "
-                                 "definition is uploaded.", loc)
-
     # The streaming license is a dataset-level capability; the server warns once
     # when a definition with any dataLinks is imported without it.
     if ds.data_links:
         report.cannot_verify("streaming-license",
-                             "Publishing into a dataset requires a subscription that supports "
-                             "streaming into server datasets; without it the import succeeds but "
-                             "the configured publishing will not happen. Cannot verify offline.",
-                             "definition/dataLinks")
+                             "Confirm the subscription supports publishing into datasets, "
+                             "otherwise the import succeeds but the configured publishing will not "
+                             "happen.", "definition/dataLinks")
 
     # A second incoming FORM link to the same form is rejected by the console.
     incoming_forms = [dl.link_object_id for dl in ds.data_links
@@ -1423,20 +1415,21 @@ def _cross_reference_form(ds: Dataset, dl: DataLink, form_fields: list,
 
 
 def _verify_offline_only(ds: Dataset, report: Report) -> None:
-    # The per-dataset field-count cap is enforced entirely from license-manager
-    # values (both maxFieldsPerDataset and maxColumnsPerTable), with no fixed
-    # threshold, so there is no defensible number to check offline. It is
-    # documented as a license gate in references/dataset-validation.md instead of
-    # being flagged here with an invented cutoff.
+    # One deduplicated reminder for every form the definition references: the
+    # forms in <formLinks> and the incoming FORM dataLink targets must all be
+    # deployed, and each linkObjectId must match the deployed form's form_id.
+    referenced_forms = list(dict.fromkeys(
+        ds.form_links + [dl.link_object_id for dl in ds.data_links
+                         if dl.link_class == "FORM" and dl.link_type == "INCOMING" and dl.link_object_id]))
+    if referenced_forms:
+        report.cannot_verify("forms-deployed",
+                             "Deploy the referenced forms before uploading; each must already exist "
+                             "on the server and its form_id must match the reference: "
+                             + ", ".join(referenced_forms) + ".", "definition")
     if ds.id:
         report.cannot_verify("id-collision",
-                             "Cannot verify offline that the dataset id is not already used by "
-                             "another dataset or reserved by a form on the server. Choose a unique "
-                             "id.", "definition/id")
-    if ds.form_links:
-        report.cannot_verify("formlinks-exist",
-                             "Cannot verify that forms in <formLinks> are deployed on the server. "
-                             "Deploy them before uploading this definition.", "definition/formLinks")
+                             f"Confirm the dataset id {ds.id!r} is not already used by another "
+                             "dataset or reserved by a form.", "definition/id")
     if _xsd_boolean_is_true(ds.allow_offline_updates):
         # The server resolves the unique record field to 'id' for cases/enumerator
         # datasets before this check, so it only rejects DATA datasets that enable
@@ -1448,8 +1441,7 @@ def _verify_offline_only(ds: Dataset, report: Report) -> None:
                          "definition/allowOfflineUpdates",
                          fix="Add <uniqueRecordField> or set <allowOfflineUpdates>false</allowOfflineUpdates>.")
         report.cannot_verify("offline-license",
-                             "Offline updates also require a subscription that supports them; "
-                             "this cannot be verified offline.",
+                             "Confirm the subscription supports offline updates.",
                              "definition/allowOfflineUpdates")
 
 
@@ -1490,8 +1482,12 @@ _SEVERITY_LABEL = {
 
 def format_text(report: Report) -> str:
     lines: list[str] = []
-    findings = sorted(report.findings, key=lambda f: _SEVERITY_ORDER[f.severity])
-    for f in findings:
+    # Errors, warnings, and recommendations are the actionable tiers, shown per
+    # finding. The cannot-verify items are server-side preconditions, collected
+    # into one deduplicated pre-upload checklist below instead of one tagged line
+    # each (which is repetitive and conflates them with the actionable tiers).
+    actionable = [f for f in report.findings if f.severity != CANNOT_VERIFY]
+    for f in sorted(actionable, key=lambda f: _SEVERITY_ORDER[f.severity]):
         head = f"[{_SEVERITY_LABEL[f.severity]}] {f.rule}"
         if f.location:
             head += f" ({f.location})"
@@ -1499,12 +1495,21 @@ def format_text(report: Report) -> str:
         lines.append(f"    {f.message}")
         if f.fix:
             lines.append(f"    fix: {f.fix}")
+
+    cannot_verify = [f for f in report.findings if f.severity == CANNOT_VERIFY]
+    if cannot_verify:
+        if lines:
+            lines.append("")
+        lines.append("Before uploading, confirm on the server (cannot be checked offline):")
+        for f in cannot_verify:
+            lines.append(f"  - {f.message}")
+
     counts = report.counts()
     lines.append("")
     lines.append(
         f"Summary: {counts[ERROR]} error(s), {counts[WARNING]} warning(s), "
         f"{counts[RECOMMENDATION]} recommendation(s), "
-        f"{counts[CANNOT_VERIFY]} item(s) needing a live server."
+        f"{counts[CANNOT_VERIFY]} server-side item(s) to confirm."
     )
     if not report.has_errors:
         if counts[WARNING] or counts[RECOMMENDATION]:

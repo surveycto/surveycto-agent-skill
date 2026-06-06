@@ -672,12 +672,30 @@ def test_link_object_id_must_match_form_id():
 
 
 @test
-def test_incoming_form_link_flags_streaming_and_form_exists():
+def test_incoming_form_link_flags_streaming_and_forms_deployed():
     fm = '[{"formField":"a","datasetField":"key"}]'
     r = _run_xml(_with_data_link(fm))
     codes = _codes(r, vd.CANNOT_VERIFY)
     _expect("streaming-license" in codes, codes)
-    _expect("form-exists" in codes, codes)
+    _expect("forms-deployed" in codes, codes)
+
+
+@test
+def test_forms_deployed_is_deduplicated():
+    # Multiple links to multiple forms collapse to one consolidated reminder.
+    fm = '[{"formField":"a","datasetField":"key"}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+        "<formLinks/><dataLinks>"
+        f"<dataLink><dataLinkClass>FORM</dataLinkClass><dataLinkType>INCOMING</dataLinkType>"
+        f"<linkObjectId>form_a</linkObjectId><fieldMap>{fm}</fieldMap></dataLink>"
+        f"<dataLink><dataLinkClass>FORM</dataLinkClass><dataLinkType>INCOMING</dataLinkType>"
+        f"<linkObjectId>form_b</linkObjectId><fieldMap>{fm}</fieldMap></dataLink>"
+        "</dataLinks>")
+    r = _run_xml(xml)
+    deployed = [f for f in r.findings if f.rule == "forms-deployed"]
+    _expect(len(deployed) == 1, f"expected one consolidated forms-deployed item, got {len(deployed)}")
+    _expect("form_a" in deployed[0].message and "form_b" in deployed[0].message, deployed[0].message)
 
 
 @test
