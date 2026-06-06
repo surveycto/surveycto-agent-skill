@@ -56,6 +56,7 @@ import json
 import re
 import sys
 import zipfile
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -96,11 +97,8 @@ DATALINK_ORDER = [
 ]
 DATALINK_REQUIRED = ["dataLinkClass", "dataLinkType", "linkObjectId"]
 
-# xs:all blocks: order-independent, only presence matters.
+# xs:all block: order-independent, only presence matters.
 CASE_MGMT_REQUIRED = ["displayMode", "showFinalizedSentWhenTree", "showColumnsWhenTable"]
-CASE_MGMT_OPTIONAL = ["otherUserCode", "entryMode", "enumeratorDatasetId"]
-ID_FORMAT_REQUIRED = ["numberOfDigits"]
-ID_FORMAT_OPTIONAL = ["prefix", "suffix", "allowCapitalLetters"]
 
 DATASET_TYPES = {"SERVER", "CLIENT", "REPORT"}
 DISCRIMINATORS = {"CASES", "ENUMERATORS", "DATA"}
@@ -116,7 +114,6 @@ DATALINK_FORMAT_LONG = 1
 # Standard column sets the console creates. id/name (enum) and id/label/formids
 # (cases) are functionally required; the rest are conventional.
 ENUM_REQUIRED_COLUMNS = ["id", "name"]
-ENUM_STANDARD_COLUMNS = ["id", "name", "users"]
 CASES_REQUIRED_COLUMNS = ["id", "label", "formids"]
 CASES_STANDARD_COLUMNS = ["id", "label", "formids", "users", "roles", "sortby", "enumerators"]
 
@@ -141,8 +138,8 @@ METADATA_FIELDS = [
 CONDITIONAL_META_FIELD_NAMES = {"formdef_id", "review_status", "instanceID", "instanceName"}
 
 # XLSForm survey `type` leading token -> publishing field type string, mirroring
-# the server's discoverElementType / dataType mapping. Notes are excluded; group
-# and repeat containers are structural, not fields.
+# the server's discoverElementType / dataType mapping. Notes are typed 'note' (not
+# publishable); group and repeat containers are structural, not fields.
 XLSFORM_TYPE_MAP = {
     "text": "text",
     "integer": "integer",
@@ -182,9 +179,6 @@ XLSFORM_TYPE_MAP = {
     "sensor_statistic": "text",
     "sensor_stream": "text",
 }
-# XLSForm types that never become a publishable field.
-NON_FIELD_TYPES = {"note", "begin group", "end group", "begin_group", "end_group",
-                   "begin repeat", "end repeat", "begin_repeat", "end_repeat"}
 
 
 # ---------------------------------------------------------------------------
@@ -293,8 +287,8 @@ def _xlsform_type(raw_type: str) -> str:
 def extract_form_fields(xlsx_path: str) -> list[FormField]:
     """Parse an XLSForm survey sheet into the field list the server publishes.
 
-    Mirrors the server's publishing field list: notes are excluded, group and
-    repeat containers are not fields, every other named row is a field, a field
+    Mirrors the server's publishing field list: group and repeat containers are
+    not fields, notes are retained but typed 'note' (not publishable), every other named row is a field, a field
     is ``repeated`` when any ancestor row is a ``begin repeat`` (nested groups do
     not make a field repeated), and the standard metadata fields are appended.
     Field names are the bare leaf ``name`` value.
@@ -699,7 +693,7 @@ def _check_sequence(children: list[str], order: list[str], report: Report,
         last_name = name
 
 
-def validate_dataset(ds: Dataset, forms: dict[str, list[FormField]], report: Report) -> None:
+def validate_dataset(ds: Dataset, forms: dict, report: Report) -> None:
     _validate_structure(ds, report)
     _validate_identity(ds, report)
     _validate_type_and_discriminator(ds, report)
@@ -1107,7 +1101,7 @@ def _validate_unique_record_field(ds: Dataset, report: Report) -> None:
                      "definition/uniqueRecordField")
 
 
-def _validate_data_links(ds: Dataset, forms: dict[str, list[FormField]], report: Report) -> None:
+def _validate_data_links(ds: Dataset, forms: dict, report: Report) -> None:
     for dl in ds.data_links:
         loc = f"dataLink[{dl.index}]"
         _check_sequence(dl.children, DATALINK_ORDER, report, "datalink-order", loc)
@@ -1147,8 +1141,10 @@ def _validate_data_links(ds: Dataset, forms: dict[str, list[FormField]], report:
 
         form_obj = _resolve_form(dl.link_object_id, forms)
 
-        if dl.field_map is not None:
-            _validate_field_map(ds, dl, report, loc)
+        # Validate the field map even when it is absent: the long-format and
+        # joining-field rules must still fire for a link with no <fieldMap>.
+        _validate_field_map(ds, dl, report, loc)
+        if dl.field_map:
             if form_obj is not None:
                 _cross_reference_form(ds, dl, form_obj.fields, report, loc)
             elif forms:
@@ -1192,17 +1188,21 @@ def _validate_data_links(ds: Dataset, forms: dict[str, list[FormField]], report:
     # A second incoming FORM link to the same form is rejected by the console.
     incoming_forms = [dl.link_object_id for dl in ds.data_links
                       if dl.link_class == "FORM" and dl.link_type == "INCOMING" and dl.link_object_id]
-    dupes = {f for f in incoming_forms if incoming_forms.count(f) > 1}
-    for f in sorted(dupes):
-        report.recommend("duplicate-form-link",
-                         f"More than one incoming FORM link targets {f!r}. A form can publish to a "
-                         "dataset through only one link; the console rejects the duplicate.",
-                         "definition/dataLinks")
+    for f in sorted(name for name, n in Counter(incoming_forms).items() if n > 1):
+        report.warning("duplicate-form-link",
+                       f"More than one incoming FORM link targets {f!r}. A form can publish to a "
+                       "dataset through only one link; the console rejects the duplicate.",
+                       "definition/dataLinks")
 
 
 def _validate_field_map(ds: Dataset, dl: DataLink, report: Report, loc: str) -> None:
-    form_fields = [t[0] for t in dl.field_map]
-    dataset_fields = [t[1] for t in dl.field_map]
+    field_map = dl.field_map or []
+    form_fields = [t[0] for t in field_map]
+    dataset_fields = [t[1] for t in field_map]
+    # The server forces the unique record field to 'id' for cases/enumerator
+    # datasets, so the joining and mapping checks use that effective value rather
+    # than the (possibly absent or ignored) declared <uniqueRecordField>.
+    effective_urf = "id" if _urf_forced_to_id(ds) else ds.unique_record_field
 
     if dl.is_long_format and not dl.joining_field:
         report.error("long-format-requires-joining",
@@ -1230,7 +1230,7 @@ def _validate_field_map(ds: Dataset, dl: DataLink, report: Report, loc: str) -> 
                          f"{MAX_FIELD_NAME_LENGTH} characters. Conflicting field: {df_base!r}.", loc)
 
     # updateLogicAction enum.
-    for ff, _df, action in dl.field_map:
+    for ff, _df, action in field_map:
         if action not in UPDATE_LOGIC_ACTIONS:
             report.error("fieldmap-action-enum",
                          f"{loc}: updateLogicAction {action!r} for {ff!r} is not valid; use one "
@@ -1255,7 +1255,7 @@ def _validate_field_map(ds: Dataset, dl: DataLink, report: Report, loc: str) -> 
                              fix=f"Add a field map entry whose formField is {joining!r}.")
         else:
             # Joining field's update logic must be REPLACE (console publishing rule).
-            for ff, _df, action in dl.field_map:
+            for ff, _df, action in field_map:
                 if ff == joining and action != "REPLACE":
                     report.error("joining-field-replace",
                                  f"{loc}: the joining field {joining!r} must use the default "
@@ -1265,23 +1265,21 @@ def _validate_field_map(ds: Dataset, dl: DataLink, report: Report, loc: str) -> 
         # The joining field must merge on the dataset's unique record column. The
         # interactive console enforces this for both formats (the field map stores
         # the column the joining field maps into).
-        if ds.unique_record_field:
-            urf = ds.unique_record_field
-            mapped = [(_df or "").rstrip("*") for ff, _df, _a in dl.field_map if ff == joining]
-            if mapped and mapped[0] != urf:
+        if effective_urf:
+            mapped = [(_df or "").rstrip("*") for ff, _df, _a in field_map if ff == joining]
+            if mapped and mapped[0] != effective_urf:
                 report.error("joining-merges-on-urf",
                              f"{loc}: the joining field maps to {mapped[0]!r}, but the dataset's "
-                             f"unique record field is {urf!r}. Please merge on the dataset field "
-                             f"{urf}, so that the appropriate row can be updated.", loc)
+                             f"unique record field is {effective_urf!r}. Please merge on the dataset "
+                             f"field {effective_urf}, so that the appropriate row can be updated.", loc)
 
     # The unique record field must be mapped by some entry (console publishing rule).
-    if ds.unique_record_field and dl.link_type == "INCOMING":
-        urf = ds.unique_record_field
-        if not any((df or "").rstrip("*") == urf for df in dataset_fields):
+    if effective_urf and dl.link_type == "INCOMING":
+        if not any((df or "").rstrip("*") == effective_urf for df in dataset_fields):
             report.error("urf-not-mapped",
-                         f"{loc}: because the {urf} field is the unique ID field for this dataset, "
-                         "you must publish a form field into that dataset field and select it as "
-                         "the form field to identify unique records.", loc)
+                         f"{loc}: because the {effective_urf} field is the unique ID field for this "
+                         "dataset, you must publish a form field into that dataset field and select "
+                         "it as the form field to identify unique records.", loc)
 
 
 def _flag_duplicates(values: list, report: Report, loc: str, label: str) -> None:

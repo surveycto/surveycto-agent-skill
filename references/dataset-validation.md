@@ -209,11 +209,12 @@ errors to fix.
 ### Form cross-reference (only with `--form`)
 
 The validator parses each supplied form `.xlsx` into the same field list the
-server publishes: notes are excluded, group and repeat containers are not
-fields, a field is repeated when any ancestor row is a `begin repeat` (plain
-groups do not make a field repeated), `calculate` fields are included, and the
-metadata fields the server always publishes (`SubmissionDate`, `formdef_version`,
-`review_quality`, `KEY`) are available as map sources. Then it checks:
+server publishes: group and repeat containers are not fields, notes are not
+publishable (mapping one is a warning, not a missing-field error), a field is
+repeated when any ancestor row is a `begin repeat` (plain groups do not make a
+field repeated), `calculate` fields are included, and the metadata fields the
+server always publishes (`SubmissionDate`, `formdef_version`, `review_quality`,
+`KEY`) are available as map sources. Then it checks:
 
 - Every form field named in the map exists in the form (error if not).
 - A field that is repeated in the form must carry `*` on both sides of its map

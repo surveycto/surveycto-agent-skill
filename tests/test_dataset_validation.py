@@ -617,6 +617,55 @@ def test_conditional_metadata_field_is_warning_not_error():
 
 
 @test
+def test_long_format_requires_joining_when_field_map_absent():
+    # A long-format link with no <fieldMap> element must still raise the error.
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
+        "<linkObjectId>f</linkObjectId></dataLink></dataLinks>")
+    r = _run_xml(xml)
+    _expect("long-format-requires-joining" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_forced_id_urf_checks_fire_without_explicit_urf():
+    # A cases dataset that omits <uniqueRecordField> still has urf forced to 'id',
+    # so a joining field mapping to the wrong column must be flagged.
+    fm = '[{"formField":"caseid","datasetField":"label"}]'
+    xml = _wrap(
+        "<id>cx</id><title>C</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,label,formids</fieldNames><formLinks/>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f</linkObjectId>"
+        f"<fieldMap>{fm}</fieldMap><joiningField>caseid</joiningField></dataLink></dataLinks>"
+        "<caseManagementOptions><displayMode>tree</displayMode>"
+        "<showFinalizedSentWhenTree>true</showFinalizedSentWhenTree>"
+        "<showColumnsWhenTable/></caseManagementOptions><discriminator>CASES</discriminator>")
+    codes = _codes(_run_xml(xml), vd.ERROR)
+    _expect("urf-not-mapped" in codes, codes)
+    _expect("joining-merges-on-urf" in codes, codes)
+
+
+@test
+def test_forced_id_urf_ignores_stray_unique_record_field():
+    # An enumerator dataset with a stray <uniqueRecordField> whose joining maps
+    # correctly to 'id' (what the server forces) must not be flagged.
+    fm = '[{"formField":"eid","datasetField":"id"},{"formField":"nm","datasetField":"name"}]'
+    xml = _wrap(
+        "<id>ex</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f</linkObjectId>"
+        f"<fieldMap>{fm}</fieldMap><joiningField>eid</joiningField></dataLink></dataLinks>"
+        "<idFormatOptions><numberOfDigits>6</numberOfDigits></idFormatOptions>"
+        "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>custom</uniqueRecordField>")
+    codes = _codes(_run_xml(xml), vd.ERROR)
+    _expect("joining-merges-on-urf" not in codes, codes)
+    _expect("urf-not-mapped" not in codes, codes)
+
+
+@test
 def test_long_format_requires_joining_field():
     fm = '[{"formField":"a*","datasetField":"key*"}]'
     xml = _wrap(
