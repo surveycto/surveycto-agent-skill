@@ -550,7 +550,7 @@ def test_form_extraction_types_and_repeat():
     ])
     fields = vd.extract_form_fields(form)
     by_name = {f.name: f for f in fields}
-    _expect("intro" not in by_name, "notes must be excluded")
+    _expect(by_name["intro"].type == "note", "notes are retained but typed 'note'")
     _expect("g1" not in by_name, "group containers are not fields")
     _expect("plots" not in by_name, "repeat containers are not fields")
     _expect(by_name["age"].repeated is False, "field in plain group is not repeated")
@@ -684,6 +684,63 @@ def test_incoming_form_link_flags_streaming_and_form_exists():
 def test_id_collision_surfaced_as_cannot_verify():
     r = _run_xml(VALID_DATA)
     _expect("id-collision" in _codes(r, vd.CANNOT_VERIFY), _codes(r, vd.CANNOT_VERIFY))
+
+
+@test
+def test_unique_record_field_must_be_mapped_is_error():
+    # Console-parity: an incoming link into a dataset with a uniqueRecordField must
+    # map into it.
+    fm = '[{"formField":"a","datasetField":"other"}]'
+    xml = _with_data_link(fm, unique_record="key", extra_fields="key,other")
+    r = _run_xml(xml)
+    _expect("urf-not-mapped" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_joining_must_merge_on_unique_record_field_is_error():
+    fm = '[{"formField":"caseid","datasetField":"other"},{"formField":"x","datasetField":"key"}]'
+    xml = _with_data_link(fm, joining="caseid", unique_record="key", extra_fields="key,other")
+    r = _run_xml(xml)
+    _expect("joining-merges-on-urf" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_outgoing_link_warned():
+    fm = '[{"formField":"a","datasetField":"key"}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>SPREADSHEET</dataLinkClass>"
+        "<dataLinkType>OUTGOING</dataLinkType><linkObjectId>sheet1</linkObjectId>"
+        f"<fieldMap>{fm}</fieldMap></dataLink></dataLinks>")
+    r = _run_xml(xml)
+    _expect("outgoing-link-console-only" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_mapped_note_is_warning():
+    form = _make_form([("note", "instructions"), ("text", "real_field")])
+    fm = '[{"formField":"instructions","datasetField":"key"}]'
+    r = _run_xml(_with_data_link(fm), forms=[form])
+    _expect("fieldmap-note" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+    _expect("fieldmap-form-field-missing" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_unexpected_root_element_rejected():
+    xml = ('<?xml version="1.0"?>\n<dataset><definition><id>x</id><title>X</title>'
+           "<datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+           "<formLinks/><dataLinks/></definition><bogus>1</bogus></dataset>")
+    r = _run_xml(xml)
+    _expect("root-unexpected-element" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_instance_requires_version():
+    xml = ('<?xml version="1.0"?>\n<dataset><definition><id>x</id><title>X</title>'
+           "<datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+           "<formLinks/><dataLinks/></definition><instance></instance></dataset>")
+    r = _run_xml(xml)
+    _expect("instance-version-required" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
 
 
 @test

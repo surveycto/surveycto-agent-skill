@@ -177,7 +177,11 @@ one gets a warning, because the inferred one is what actually applies.
 
 ### Field map and publishing rules
 
-### Field map and publishing rules
+The publishing-configuration rules below are errors because the interactive
+console rejects them when the link is saved or edited. The bulk dataset-XML
+import is more lenient on some of them, but a definition that violates them does
+not represent a valid console-created dataset, so the validator treats them as
+errors to fix.
 
 - The field map JSON must parse. Both shapes are accepted: the modern array
   (`[{"formField":..,"datasetField":..,"updateLogicAction":..}]`) and the legacy
@@ -189,10 +193,12 @@ one gets a warning, because the inferred one is what actually applies.
   field is mapped, its entry must use `REPLACE` (error).
 - Long-format publishing (`<dataLinkFormat>1</dataLinkFormat>`) requires a
   `<joiningField>` (error).
-- For wide-format incoming links into a dataset with a `uniqueRecordField`, the
-  joining field should map to the unique record column, and the unique record
-  column should be mapped by some entry (warnings; these are console-level
-  publishing rules that bite when the link is saved or edited).
+- For an incoming link into a dataset with a `uniqueRecordField`, the unique
+  record column must be mapped by some entry, and the joining field must map into
+  it (errors).
+- An incoming `FORM` link with an empty field map publishes nothing (warning).
+  Outgoing and cloud links (`OUTGOING`, `SPREADSHEET`, `FUSION_TABLE`) are
+  console-only and are not created by a definition import (warning).
 
 ### Form cross-reference (only with `--form`)
 

@@ -264,3 +264,18 @@ The other two values are legacy or system-managed. Never generate them; recogniz
 | `DATA` | Standard data dataset |
 | `CASES` | Case management dataset |
 | `ENUMERATORS` | Enumerator assignment dataset |
+
+The server infers the discriminator from the option blocks present: `<caseManagementOptions>` forces CASES and `<idFormatOptions>` forces ENUMERATORS, overriding a conflicting `<discriminator>`. A dataset is also treated as a cases dataset when its `<id>` is literally `cases`, or (in later console/data-access paths, not at import) when its column set matches the full cases signature.
+
+## Less-obvious server behaviors
+
+These are real behaviors the server applies that are easy to miss when authoring by hand:
+
+- **Publishable fields.** Only data-bearing form fields can be published into a dataset. Notes are not publishable. `select_multiple` publishes as one field (a space-separated value), not one column per choice. A `geopoint` publishes as a single field; its derived `-Latitude`/`-Longitude`/`-Altitude`/`-Accuracy` columns are not separately publishable. `geoshape`, `geotrace`, and `barcode` publish as single string fields. Fields inside a repeat group carry the `*` suffix in the field map.
+- **Always-available metadata sources.** `SubmissionDate`, `formdef_version`, `review_quality`, and `KEY` are always available as field-map sources even though they are not survey rows. `formdef_id`, `review_status`, `instanceID`, and `instanceName` are not part of the incoming form-to-dataset feed; do not rely on them as publishing sources.
+- **Cases virtual columns.** `scto_saved_count` and `scto_sent_count` are valid entries in `<showColumnsWhenTable>` but must not appear in `<fieldNames>` (the server maintains them).
+- **`entryMode` default.** When `<enumeratorDatasetId>` is set on a cases dataset and `<entryMode>` is omitted, the server defaults `entryMode` to `LIST`.
+- **Enumerator `name` uniqueness.** The `name` column of an enumerator dataset has a database unique index: two enumerators cannot share a name. This is enforced when data is inserted, not at definition upload, so the validator cannot check it offline.
+- **`allowOfflineUpdates` needs a unique record field.** Enabling offline updates requires a unique record field (forced to `id` for cases/enumerator datasets), and a subscription that supports offline publishing.
+- **Outgoing and cloud links are console-only.** `OUTGOING` links and the `SPREADSHEET`/`FUSION_TABLE` classes are configured in the console, not created by importing a dataset definition. `WEBHOOK`/`ZAPIER` are not in the import schema at all. Author only incoming `FORM` links in definitions.
+- **`isAutoConfigured` is server-generated.** Leave it `false` (or omit it). The auto-configured enumerator-link constraints are applied by the console, not the import path.
