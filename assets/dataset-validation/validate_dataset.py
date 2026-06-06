@@ -1423,6 +1423,15 @@ def _cross_reference_form(ds: Dataset, dl: DataLink, form_fields: list,
 
 
 def _verify_offline_only(ds: Dataset, report: Report) -> None:
+    # The maximum number of fields per dataset is license-dependent (the server
+    # enforces a subscription-tier cap, not a fixed number), so it cannot be
+    # checked exactly offline. Surface it only for large datasets to avoid noise.
+    nonrepeated = sum(1 for c in ds.field_names if not c.endswith("*"))
+    if nonrepeated > 100:
+        report.cannot_verify("field-count-limit",
+                             f"This dataset has {nonrepeated} non-repeated columns. The server "
+                             "caps fields per dataset at a subscription-dependent maximum; confirm "
+                             "this fits the plan.", "definition/fieldNames")
     if ds.id:
         report.cannot_verify("id-collision",
                              "Cannot verify offline that the dataset id is not already used by "
