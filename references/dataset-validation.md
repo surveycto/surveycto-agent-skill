@@ -202,7 +202,8 @@ errors to fix.
 - For an incoming link into a dataset with a `uniqueRecordField`, the unique
   record column must be mapped by some entry, and the joining field must map into
   it (errors).
-- An incoming `FORM` link with an empty field map publishes nothing (warning).
+- An incoming `FORM` link with an empty field map publishes nothing; the console
+  rejects it (error).
   Outgoing and cloud links (`OUTGOING`, `SPREADSHEET`, `FUSION_TABLE`) are
   console-only and are not created by a definition import (warning).
 

@@ -675,7 +675,10 @@ def _check_sequence(children: list[str], order: list[str], report: Report,
     """Flag children not in the canonical order, and unknown children."""
     rank = {name: i for i, name in enumerate(order)}
     last_rank = -1
-    last_name = None
+    # The highest-ranked element seen so far; an out-of-order element belongs
+    # before this one. Updated only on in-order elements so the message and fix
+    # name the right anchor even when several elements are out of order.
+    high_name = None
     for name in children:
         if name not in rank:
             report.error(rule, f"Unexpected element <{name}> in {location}; "
@@ -684,13 +687,14 @@ def _check_sequence(children: list[str], order: list[str], report: Report,
         if rank[name] < last_rank:
             report.error(
                 rule,
-                f"<{name}> appears after <{last_name}> in {location}, but the "
+                f"<{name}> appears after <{high_name}> in {location}, but the "
                 f"schema requires this order: {', '.join(order)}.",
                 location,
-                fix=f"Move <{name}> before <{last_name}>.",
+                fix=f"Move <{name}> before <{high_name}>.",
             )
-        last_rank = max(last_rank, rank[name])
-        last_name = name
+        else:
+            last_rank = rank[name]
+            high_name = name
 
 
 def validate_dataset(ds: Dataset, forms: dict, report: Report) -> None:
@@ -775,7 +779,10 @@ def _validate_identity(ds: Dataset, report: Report) -> None:
                 f"Got: {ds.id!r}.",
                 "definition/id",
             )
-        if ds.id.lower().endswith("_qc") and (ds.dataset_type != "REPORT"):
+        # The server checks the _qc suffix only after the type is validated, so do
+        # not pile this on when the type is missing or itself invalid.
+        if (ds.id.lower().endswith("_qc") and ds.dataset_type in DATASET_TYPES
+                and ds.dataset_type != "REPORT"):
             report.error("id-qc-suffix",
                          "The ID can not end with '_qc'. Please correct the ID and try again.",
                          "definition/id")
@@ -1102,6 +1109,14 @@ def _validate_unique_record_field(ds: Dataset, report: Report) -> None:
 
 
 def _validate_data_links(ds: Dataset, forms: dict, report: Report) -> None:
+    # When the definition references more than one distinct form but only one form
+    # file is supplied, the single-form fallback in _resolve_form would match that
+    # one file against every link, cross-referencing the wrong fields. Disable the
+    # fallback in that ambiguous case.
+    distinct_form_targets = {dl.link_object_id for dl in ds.data_links
+                             if dl.link_class == "FORM" and dl.link_type == "INCOMING"
+                             and dl.link_object_id}
+    allow_single_fallback = len(distinct_form_targets) <= 1
     for dl in ds.data_links:
         loc = f"dataLink[{dl.index}]"
         _check_sequence(dl.children, DATALINK_ORDER, report, "datalink-order", loc)
@@ -1139,7 +1154,7 @@ def _validate_data_links(ds: Dataset, forms: dict, report: Report) -> None:
                          loc)
             continue
 
-        form_obj = _resolve_form(dl.link_object_id, forms)
+        form_obj = _resolve_form(dl.link_object_id, forms, allow_single_fallback)
 
         # Validate the field map even when it is absent: the long-format and
         # joining-field rules must still fire for a link with no <fieldMap>.
@@ -1153,12 +1168,12 @@ def _validate_data_links(ds: Dataset, forms: dict, report: Report) -> None:
                                  "field names in the map were not checked against the form.", loc)
 
         # An incoming FORM link with no field map publishes nothing; the console
-        # rejects it on save (it imports, but does not do anything useful).
+        # rejects it ("Please select at least one field"). It imports but is inert.
         if (dl.link_class == "FORM" and dl.link_type == "INCOMING"
                 and not dl.field_map and not dl.field_map_error):
-            report.warning("fieldmap-empty",
-                           f"{loc}: the field map is empty, so this link publishes nothing. "
-                           "Please select at least one field.", loc)
+            report.error("fieldmap-empty",
+                         f"{loc}: the field map is empty, so this link publishes nothing. "
+                         "Please select at least one field.", loc)
 
         # Outgoing and cloud links are configured through the console, not a
         # dataset definition import (the import path handles incoming FORM links).
@@ -1300,8 +1315,8 @@ def _flag_duplicates(values: list, report: Report, loc: str, label: str) -> None
                      "edited in the console.", loc)
 
 
-def _resolve_form(link_object_id: Optional[str],
-                  forms: dict) -> Optional["FormInfo"]:
+def _resolve_form(link_object_id: Optional[str], forms: dict,
+                  allow_single_fallback: bool = True) -> Optional["FormInfo"]:
     if not link_object_id or not forms:
         return None
     # Prefer matching the form's declared form_id (the deployed link target).
@@ -1311,9 +1326,10 @@ def _resolve_form(link_object_id: Optional[str],
     # Then the file stem (common when the file is named after the form id).
     if link_object_id in forms:
         return forms[link_object_id]
-    # Finally, a single supplied form matches regardless of id, to ease the
-    # common one-form case where the file name differs from the form id.
-    if len(forms) == 1:
+    # Finally, a single supplied form matches regardless of id, to ease the common
+    # one-form case where the file name differs from the form id. Skipped when the
+    # definition references several distinct forms (the match would be ambiguous).
+    if allow_single_fallback and len(forms) == 1:
         return next(iter(forms.values()))
     return None
 

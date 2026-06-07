@@ -617,6 +617,23 @@ def test_conditional_metadata_field_is_warning_not_error():
 
 
 @test
+def test_empty_incoming_form_map_is_error():
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>k</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f</linkObjectId></dataLink></dataLinks>")
+    _expect("fieldmap-empty" in _codes(_run_xml(xml), vd.ERROR), _codes(_run_xml(xml), vd.ERROR))
+
+
+@test
+def test_id_qc_not_flagged_when_type_missing():
+    # The server checks the _qc suffix only after the type validates.
+    r = _run_xml(_wrap("<id>data_qc</id><title>X</title>"))
+    _expect("id-qc-suffix" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+    _expect("type-missing" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
 def test_long_format_requires_joining_when_field_map_absent():
     # A long-format link with no <fieldMap> element must still raise the error.
     xml = _wrap(
