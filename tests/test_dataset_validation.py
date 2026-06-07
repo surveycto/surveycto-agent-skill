@@ -622,7 +622,37 @@ def test_empty_incoming_form_map_is_error():
         "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>k</fieldNames>"
         "<formLinks/><dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
         "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f</linkObjectId></dataLink></dataLinks>")
-    _expect("fieldmap-empty" in _codes(_run_xml(xml), vd.ERROR), _codes(_run_xml(xml), vd.ERROR))
+    r = _run_xml(xml)
+    _expect("fieldmap-empty" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_outgoing_link_skips_incoming_publishing_rules():
+    # A console-only outgoing/cloud link must not get the incoming field-map rules.
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>k</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>SPREADSHEET</dataLinkClass>"
+        "<dataLinkType>OUTGOING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
+        "<linkObjectId>sheet1</linkObjectId></dataLink></dataLinks>")
+    r = _run_xml(xml)
+    _expect("long-format-requires-joining" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+    _expect("outgoing-link-console-only" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_id_qc_not_flagged_for_client():
+    # The server rejects CLIENT before reaching the _qc check, so id-qc must not
+    # pile on; SERVER with a _qc id still fires it.
+    r = _run_xml(_wrap("<id>data_qc</id><title>X</title><datasetType>CLIENT</datasetType>"))
+    _expect("id-qc-suffix" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+    _expect("type-client" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_duplicate_definition_child_rejected():
+    xml = ('<?xml version="1.0"?><dataset><definition><id>a</id><id>b</id><title>X</title>'
+           "<datasetType>SERVER</datasetType><formLinks/><dataLinks/></definition></dataset>")
+    _expect("definition-order" in _codes(_run_xml(xml), vd.ERROR), "duplicate id not flagged")
 
 
 @test

@@ -679,11 +679,18 @@ def _check_sequence(children: list[str], order: list[str], report: Report,
     # before this one. Updated only on in-order elements so the message and fix
     # name the right anchor even when several elements are out of order.
     high_name = None
+    seen: set = set()
     for name in children:
         if name not in rank:
             report.error(rule, f"Unexpected element <{name}> in {location}; "
                          f"the schema does not allow it here.", location)
             continue
+        # Every element in these sequences is maxOccurs=1, so a repeat is rejected.
+        if name in seen:
+            report.error(rule, f"<{name}> appears more than once in {location}; "
+                         "the schema allows it at most once.", location)
+            continue
+        seen.add(name)
         if rank[name] < last_rank:
             report.error(
                 rule,
@@ -779,10 +786,10 @@ def _validate_identity(ds: Dataset, report: Report) -> None:
                 f"Got: {ds.id!r}.",
                 "definition/id",
             )
-        # The server checks the _qc suffix only after the type is validated, so do
-        # not pile this on when the type is missing or itself invalid.
-        if (ds.id.lower().endswith("_qc") and ds.dataset_type in DATASET_TYPES
-                and ds.dataset_type != "REPORT"):
+        # The server reaches the _qc check only for SERVER datasets: CLIENT is
+        # rejected earlier as unsupported, and REPORT datasets are allowed to end
+        # in _qc. So flag it only for SERVER (the only type the agent authors).
+        if ds.id.lower().endswith("_qc") and ds.dataset_type == "SERVER":
             report.error("id-qc-suffix",
                          "The ID can not end with '_qc'. Please correct the ID and try again.",
                          "definition/id")
@@ -1109,14 +1116,14 @@ def _validate_unique_record_field(ds: Dataset, report: Report) -> None:
 
 
 def _validate_data_links(ds: Dataset, forms: dict, report: Report) -> None:
+    incoming_forms = [dl.link_object_id for dl in ds.data_links
+                      if dl.link_class == "FORM" and dl.link_type == "INCOMING"
+                      and dl.link_object_id]
     # When the definition references more than one distinct form but only one form
     # file is supplied, the single-form fallback in _resolve_form would match that
     # one file against every link, cross-referencing the wrong fields. Disable the
     # fallback in that ambiguous case.
-    distinct_form_targets = {dl.link_object_id for dl in ds.data_links
-                             if dl.link_class == "FORM" and dl.link_type == "INCOMING"
-                             and dl.link_object_id}
-    allow_single_fallback = len(distinct_form_targets) <= 1
+    allow_single_fallback = len(set(incoming_forms)) <= 1
     for dl in ds.data_links:
         loc = f"dataLink[{dl.index}]"
         _check_sequence(dl.children, DATALINK_ORDER, report, "datalink-order", loc)
@@ -1154,10 +1161,20 @@ def _validate_data_links(ds: Dataset, forms: dict, report: Report) -> None:
                          loc)
             continue
 
+        # Outgoing and cloud links are configured through the console, not a
+        # dataset definition import, so the incoming-publishing rules below (field
+        # map, joining field, unique record field) do not apply to them.
+        if dl.link_type == "OUTGOING" or dl.link_class in ("SPREADSHEET", "FUSION_TABLE"):
+            report.warning("outgoing-link-console-only",
+                           f"{loc}: outgoing / cloud publishing links (OUTGOING, SPREADSHEET, "
+                           "FUSION_TABLE) are set up in the console, not via a dataset definition "
+                           "import. This link will not be created by uploading the definition.", loc)
+            continue
+
         form_obj = _resolve_form(dl.link_object_id, forms, allow_single_fallback)
 
         # Validate the field map even when it is absent: the long-format and
-        # joining-field rules must still fire for a link with no <fieldMap>.
+        # joining-field rules must still fire for an incoming link with no <fieldMap>.
         _validate_field_map(ds, dl, report, loc)
         if dl.field_map:
             if form_obj is not None:
@@ -1169,19 +1186,10 @@ def _validate_data_links(ds: Dataset, forms: dict, report: Report) -> None:
 
         # An incoming FORM link with no field map publishes nothing; the console
         # rejects it ("Please select at least one field"). It imports but is inert.
-        if (dl.link_class == "FORM" and dl.link_type == "INCOMING"
-                and not dl.field_map and not dl.field_map_error):
+        if dl.link_class == "FORM" and not dl.field_map:
             report.error("fieldmap-empty",
                          f"{loc}: the field map is empty, so this link publishes nothing. "
                          "Please select at least one field.", loc)
-
-        # Outgoing and cloud links are configured through the console, not a
-        # dataset definition import (the import path handles incoming FORM links).
-        if dl.link_type == "OUTGOING" or dl.link_class in ("SPREADSHEET", "FUSION_TABLE"):
-            report.warning("outgoing-link-console-only",
-                           f"{loc}: outgoing / cloud publishing links (OUTGOING, SPREADSHEET, "
-                           "FUSION_TABLE) are set up in the console, not via a dataset definition "
-                           "import. This link will not be created by uploading the definition.", loc)
 
         # The linkObjectId must be the deployed form's form_id, not its file name.
         if (form_obj is not None and form_obj.form_id and dl.link_object_id
@@ -1201,8 +1209,6 @@ def _validate_data_links(ds: Dataset, forms: dict, report: Report) -> None:
                              "happen.", "definition/dataLinks")
 
     # A second incoming FORM link to the same form is rejected by the console.
-    incoming_forms = [dl.link_object_id for dl in ds.data_links
-                      if dl.link_class == "FORM" and dl.link_type == "INCOMING" and dl.link_object_id]
     for f in sorted(name for name, n in Counter(incoming_forms).items() if n > 1):
         report.warning("duplicate-form-link",
                        f"More than one incoming FORM link targets {f!r}. A form can publish to a "
