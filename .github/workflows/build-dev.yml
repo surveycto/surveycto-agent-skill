@@ -29,6 +29,9 @@ jobs:
           python3 tests/test_translation.py
           python3 tests/test_transcription.py
 
+      - name: Test dataset validator
+        run: python3 tests/test_dataset_validation.py
+
       - name: Build zip
         run: |
           zip -r surveycto-skill-dev.zip SKILL.md references assets \

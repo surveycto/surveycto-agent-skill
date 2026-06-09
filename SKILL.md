@@ -353,6 +353,7 @@ Dataset definitions are XML files with a `<dataset>` root element. They define c
 - Element names are **case-sensitive** (e.g., `otherUserCode`, not `otherUsercode`).
 - Forms in `<formLinks>` and `<dataLinks>` must be deployed before uploading the definition.
 - `<showColumnsWhenTable>` contains multiple `<columnNames>` child elements, not a comma-separated string.
+- **After creating or editing any dataset XML, validate and self-correct before delivering.** Run the bundled validator and fix what it reports. Read [`references/dataset-validation.md`](references/dataset-validation.md) for how to run it and how to act on its findings.
 
 **Full reference (read before any dataset XML work)**: [`references/datasets-xml.md`](references/datasets-xml.md).
 
@@ -486,6 +487,7 @@ In the dataset XML, add a `<dataLink>` with:
 | [`references/form-conversion-commcare.md`](references/form-conversion-commcare.md) | Converting a CommCare XForms `.xml` export — XForms anatomy, parsing helper, itext → `label:Lang`, case-management caveats |
 | [`references/expressions.md`](references/expressions.md) | Any expression work (relevance, constraint, calculation, choice_filter) |
 | [`references/datasets-xml.md`](references/datasets-xml.md) | Server dataset XML definitions |
+| [`references/dataset-validation.md`](references/dataset-validation.md) | **Run after authoring/editing any dataset XML** — validate the definition against the server's create/edit rules with the bundled `assets/dataset-validation/validate_dataset.py`, then self-correct |
 | [`references/data-explorer.md`](references/data-explorer.md) | Data Explorer dashboards |
 | [`references/field-plugins.md`](references/field-plugins.md) | Field plug-in authoring, packaging, form API, and testing |
 
