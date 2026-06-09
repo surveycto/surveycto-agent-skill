@@ -9,12 +9,17 @@ description: >
   patterns, constraints, calculations, dataset publishing, and case
   management. Also covers converting forms from KoboToolbox/ODK
   XLSForms, CommCare XForms XML, Qualtrics .qsf JSON, and other sources
-  into SurveyCTO XLSForms. Use when the user mentions SurveyCTO,
-  XLSForm, ODK-based forms, survey forms, or data collection forms;
-  when working with relevant .xlsx, .xml, or .fieldplugin.zip files;
-  or when converting a form from another platform. New XLSForms always
-  start from the bundled template at assets/xlsform-template.xlsx —
-  never built from scratch.
+  into SurveyCTO XLSForms. Also covers translating exported response
+  data (CSV columns of open-ended answers, enumerator notes) into
+  another language and transcribing audio captures (audio-audit
+  recordings, voice responses), both via cloud services with safe
+  credential handling. Use when the user mentions SurveyCTO, XLSForm,
+  ODK-based forms, survey forms, or data collection forms; when working
+  with relevant .xlsx, .xml, or .fieldplugin.zip files; when converting
+  a form from another platform; or when translating or transcribing
+  exported SurveyCTO response data or audio. New XLSForms always start
+  from the bundled template at assets/xlsform-template.xlsx, never built
+  from scratch.
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
