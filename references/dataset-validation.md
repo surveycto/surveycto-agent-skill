@@ -81,154 +81,17 @@ specific rule ids.
 
 ## What the validator checks
 
-This is the rule inventory, grouped by area, with the tier each finding uses.
-The validator is the source of truth for the exact conditions; this list is for
-your situational awareness so you can pre-empt the common mistakes.
-
-### Structure and schema (errors)
-
-- `<definition>` children must appear in schema order: `id`, `title`,
-  `datasetType`, `fieldNames`, `formLinks`, `dataLinks`, `caseManagementOptions`,
-  `idFormatOptions`, `discriminator`, `uniqueRecordField`, `allowOfflineUpdates`.
-- `<dataLink>` children must appear in schema order: `dataLinkClass`,
-  `dataLinkType`, `dataLinkState`, `dataLinkFormat`, `linkObjectId`, `fieldMap`,
-  `joiningField`, `relevanceField`, `isAutoConfigured`. The most common mistake
-  is placing `joiningField` before `fieldMap`.
-- `id`, `title`, and `datasetType` are required in `<definition>`;
-  `dataLinkClass`, `dataLinkType`, and `linkObjectId` are required in each
-  `<dataLink>`.
-- Unknown/unexpected elements in either container are rejected.
-- Enumerations: `datasetType` in {SERVER, CLIENT, REPORT}; `discriminator` in
-  {DATA, CASES, ENUMERATORS}; `dataLinkClass` in {FORM, FUSION_TABLE,
-  SPREADSHEET}; `dataLinkType` in {INCOMING, OUTGOING}; `dataLinkState` in
-  {ENABLED, DISABLED}; `entryMode` in {LIST, ENTRY, SCAN}.
-- A `DOCTYPE` declaration is rejected outright (dataset definitions never carry
-  one).
-
-### Identity and type (errors)
-
-- `id` must be non-blank and contain only numbers, letters, dashes, and
-  underscores. It must not end with `_qc`.
-- `title` must be non-blank.
-- `CLIENT` and `REPORT` are never authored: `CLIENT` (desktop) datasets are no
-  longer supported and `REPORT` datasets are system-managed. Emit `SERVER`.
-
-### Effective discriminator (inferred)
-
-The server infers the discriminator from the option blocks present, overriding a
-conflicting `<discriminator>`: `<caseManagementOptions>` forces CASES, otherwise
-`<idFormatOptions>` forces ENUMERATORS, otherwise the declared `<discriminator>`
-(or DATA). A definition whose declared discriminator disagrees with the inferred
-one gets a warning, because the inferred one is what actually applies.
-
-### idFormatOptions, for enumerator datasets
-
-- When an enumerator dataset omits `<idFormatOptions>`, the server defaults it to
-  6 digits with no prefix or suffix (warning, not an error: add the block to
-  control the ID format).
-- When present, `<idFormatOptions>` must contain `<numberOfDigits>` (error).
-- `prefix` and `suffix` must be alphanumeric only and at most 10 characters
-  (error). A value like `ENU-` is rejected for the hyphen. Unicode letters are
-  allowed (the server uses a Unicode alphanumeric check here).
-- `numberOfDigits` must be an integer from 4 to 8 (default 6) (error).
-
-### caseManagementOptions, for cases datasets
-
-- When a cases dataset omits `<caseManagementOptions>`, the server defaults it to
-  tree display (warning, not an error: add the block to control display/entry).
-- When present, it must contain `displayMode`, `showFinalizedSentWhenTree`, and
-  `showColumnsWhenTable` (error).
-- `displayMode` must be `tree` or `table` (error).
-- For `table`, `showColumnsWhenTable` must be non-empty and must include the
-  `id` column (error).
-- `otherUserCode`, when present, must be latin alphanumeric (ASCII letters and
-  digits only) (error).
-
-### Standard columns
-
-- Enumerator datasets need `id` and `name` (warning if missing: the upload
-  succeeds, but rows are rejected when enumerator data is inserted) and normally
-  include `users` (warning if missing: silently loses per-user filtering,
-  auto-selection, and the manager-code prompt). The standard set is
-  `id,name,users`; append any extra columns after it.
-- Cases datasets need `id`, `label`, and `formids` (warning if missing: the
-  upload succeeds, but the case list fails to render in Collect without them).
-  The full standard set is `id,label,formids,users,roles,sortby,enumerators`;
-  the last four are recommendations.
-
-### fieldNames
-
-- No field name may exceed 60 characters (error). This limit also covers the
-  `datasetField` columns named in a field map.
-- Two columns that collapse to the same database name (after replacing every
-  non-`[A-Za-z0-9_]` character with `_` and comparing case-insensitively, so
-  `Region`/`region` or `my field`/`my_field` collide) are rejected on import
-  (error).
-- The reserved name `rowId` is a warning: the import path does not reject it, but
-  it can cause problems, so rename it.
-
-### uniqueRecordField
-
-- Cases and enumerator datasets ignore a supplied `<uniqueRecordField>` and force
-  `id` (a non-`id` value is a warning; a missing one is a warning).
-- For a DATA dataset, a non-blank `<uniqueRecordField>` must be one of the columns
-  in `<fieldNames>`, or the server rejects the upload (error). This holds for long
-  format too: use the dataset column the joining field maps into, not the bare
-  form field.
-- `allowOfflineUpdates` enabled on a DATA dataset without a unique record field is
-  an error. Boolean elements must be `true`/`false`/`1`/`0` (lowercase); other
-  values are rejected by the schema (error).
-- Always include `<formLinks>` and `<dataLinks>`, even empty: omitting either
-  makes the import fail (warning).
-
-### Field map and publishing rules
-
-The publishing-configuration rules below are errors because the interactive
-console rejects them when the link is saved or edited. The bulk dataset-XML
-import is more lenient on some of them, but a definition that violates them does
-not represent a valid console-created dataset, so the validator treats them as
-errors to fix.
-
-- The field map JSON must parse. Both shapes are accepted: the modern array
-  (`[{"formField":..,"datasetField":..,"updateLogicAction":..}]`) and the legacy
-  object (`{"formField":"datasetField"}`).
-- No form field and no dataset field may be mapped more than once (error).
-- `updateLogicAction`, when present, must be `REPLACE`, `ADD_TO_NUMERIC_VALUE`,
-  or `CONCATENATE_TO_TEXT`.
-- A `joiningField` must be present in the field map (error). When the joining
-  field is mapped, its entry must use `REPLACE` (error).
-- Long-format publishing (`<dataLinkFormat>1</dataLinkFormat>`) requires a
-  `<joiningField>` (error).
-- For an incoming link into a dataset with a `uniqueRecordField`, the unique
-  record column must be mapped by some entry, and the joining field must map into
-  it (errors).
-- An incoming `FORM` link with an empty field map publishes nothing; the console
-  rejects it (error).
-  Outgoing and cloud links (`OUTGOING`, `SPREADSHEET`, `FUSION_TABLE`) are
-  console-only and are not created by a definition import (warning).
-
-### Form cross-reference (only with `--form`)
-
-The validator parses each supplied form `.xlsx` into the same field list the
-server publishes: group and repeat containers are not fields, notes are not
-publishable (mapping one is a warning, not a missing-field error), a field is
-repeated when any ancestor row is a `begin repeat` (plain groups do not make a
-field repeated), `calculate` fields are included, and the metadata fields the
-server always publishes (`SubmissionDate`, `formdef_version`, `review_quality`,
-`KEY`) are available as map sources. Then it checks:
-
-- Every form field named in the map exists in the form (error if not).
-- A field that is repeated in the form must carry `*` on both sides of its map
-  entry; a non-repeated field must not (error on mismatch in wide format).
-- The joining field exists in the form (error if not), and for long format it
-  must be inside a repeat group (error if not).
-- For long format, every published field (and the relevance field) must be in the
-  same repeat instance as the joining field, in a parent group, or outside all
-  groups. A field from a different, sibling repeat group does not qualify (error).
-- The relevance field, when set, exists in the form (warning if not).
-- `<linkObjectId>` should equal the form's `form_id` (read from the form's
-  settings sheet), not the file name. A mismatch with a supplied form is a
-  warning.
+You do not need the full rule list in context: the validator reports each
+problem with a clear message, a location, and (often) a fix, so act on what it
+prints. In short, it covers the schema structure (element order, required
+children, enumerations, lexical types), the id/title/type rules, the
+`idFormatOptions` and `caseManagementOptions` value rules, the standard column
+sets, the `uniqueRecordField` rules, and the field-map and long-format
+publishing rules (including the cases behind a joining field missing from the
+map or a field mapped twice). With a `--form`, it also checks the field map
+against the form's real fields. The most important of these rules are also in
+[`datasets-xml.md`](datasets-xml.md); for the exact conditions, read the
+validator source (its header cites the server files each rule comes from).
 
 ## What the validator cannot check
 

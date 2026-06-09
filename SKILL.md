@@ -340,29 +340,9 @@ Dataset definitions are XML files with a `<dataset>` root element. They define c
 - Element names are **case-sensitive** (e.g., `otherUserCode`, not `otherUsercode`).
 - Forms in `<formLinks>` and `<dataLinks>` must be deployed before uploading the definition.
 - `<showColumnsWhenTable>` contains multiple `<columnNames>` child elements, not a comma-separated string.
+- **After creating or editing any dataset XML, validate and self-correct before delivering.** Run the bundled validator and fix what it reports. Read [`references/dataset-validation.md`](references/dataset-validation.md) for how to run it and how to act on its findings.
 
 **Full reference (read before any dataset XML work)**: [`references/datasets-xml.md`](references/datasets-xml.md).
-
-### Validate before delivering a dataset
-
-After you create or edit any dataset definition XML, **validate it and
-self-correct before handing it to the user.** The skill bundles a dataset
-validator that re-implements the rules the SurveyCTO server and console enforce
-(element order, enumerations, `idFormatOptions` and case-management value rules,
-standard column sets, and the field-map / publishing rules behind issues like a
-joining field missing from the field map or a form field mapped twice). Run it
-from the skill root:
-
-```
-python3 assets/dataset-validation/validate_dataset.py path/to/dataset.xml --form path/to/form.xlsx
-```
-
-Supply each referenced form `.xlsx` with `--form` so the field map is checked
-against the form's real fields. Fix every `error`, then re-run until clean; apply
-`warning`/`recommendation` items unless the user asked otherwise; and surface the
-`cannot_verify` items (form deployment, data uniqueness, license) to the user.
-**Read [`references/dataset-validation.md`](references/dataset-validation.md) for
-the workflow, the rule inventory, and the offline limits.**
 
 ## Data Explorer workbook definitions
 
