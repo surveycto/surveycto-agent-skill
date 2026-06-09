@@ -60,6 +60,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Optional
 
+# A parsed field-map entry: (formField, datasetField, updateLogicAction). The
+# form and dataset fields are strings or None (a non-string JSON value is coerced
+# to None and reported as a shape error); the action is always a string.
+FieldMapEntry = tuple[Optional[str], Optional[str], str]
+
 # ---------------------------------------------------------------------------
 # Rule manifest (source citations, for re-derivation on drift)
 #
@@ -97,8 +102,12 @@ DATALINK_ORDER = [
 ]
 DATALINK_REQUIRED = ["dataLinkClass", "dataLinkType", "linkObjectId"]
 
-# xs:all block: order-independent, only presence matters.
+# xs:all blocks: order-independent, but only these children are allowed and each
+# may appear at most once.
 CASE_MGMT_REQUIRED = ["displayMode", "showFinalizedSentWhenTree", "showColumnsWhenTable"]
+CASE_MGMT_ALLOWED = {"displayMode", "showFinalizedSentWhenTree", "showColumnsWhenTable",
+                     "otherUserCode", "entryMode", "enumeratorDatasetId"}
+ID_FORMAT_ALLOWED = {"prefix", "suffix", "numberOfDigits", "allowCapitalLetters"}
 
 DATASET_TYPES = {"SERVER", "CLIENT", "REPORT"}
 DISCRIMINATORS = {"CASES", "ENUMERATORS", "DATA"}
@@ -220,23 +229,23 @@ class Report:
             location: str = "", fix: str = "") -> None:
         self.findings.append(Finding(severity, rule, message, location, fix))
 
-    def error(self, rule, message, location="", fix=""):
+    def error(self, rule: str, message: str, location: str = "", fix: str = "") -> None:
         self.add(ERROR, rule, message, location, fix)
 
-    def warning(self, rule, message, location="", fix=""):
+    def warning(self, rule: str, message: str, location: str = "", fix: str = "") -> None:
         self.add(WARNING, rule, message, location, fix)
 
-    def recommend(self, rule, message, location="", fix=""):
+    def recommend(self, rule: str, message: str, location: str = "", fix: str = "") -> None:
         self.add(RECOMMENDATION, rule, message, location, fix)
 
-    def cannot_verify(self, rule, message, location="", fix=""):
+    def cannot_verify(self, rule: str, message: str, location: str = "", fix: str = "") -> None:
         self.add(CANNOT_VERIFY, rule, message, location, fix)
 
     @property
     def has_errors(self) -> bool:
         return any(f.severity == ERROR for f in self.findings)
 
-    def counts(self) -> dict:
+    def counts(self) -> dict[str, int]:
         out = {ERROR: 0, WARNING: 0, RECOMMENDATION: 0, CANNOT_VERIFY: 0}
         for f in self.findings:
             out[f.severity] = out.get(f.severity, 0) + 1
@@ -451,13 +460,13 @@ class DataLink:
         self.relevance_field: Optional[str] = None
         self.is_auto_configured_raw: Optional[str] = None
         # Parsed field map as list of (formField, datasetField, updateLogicAction).
-        self.field_map: Optional[list[tuple]] = None
+        self.field_map: Optional[list[FieldMapEntry]] = None
         self.field_map_error: Optional[str] = None
 
     @property
     def is_long_format(self) -> bool:
         try:
-            return int(self.link_format) == DATALINK_FORMAT_LONG
+            return self.link_format is not None and int(self.link_format) == DATALINK_FORMAT_LONG
         except (TypeError, ValueError):
             return False
 
@@ -494,29 +503,33 @@ def _text(el) -> str:
     return (el.text or "").strip() if el is not None else ""
 
 
-def parse_field_map(raw: str) -> list[tuple]:
+def parse_field_map(raw: str) -> list[FieldMapEntry]:
     """Parse a fieldMap into [(formField, datasetField, updateLogicAction)].
 
     Accepts both the modern array form
     ``[{"formField":..,"datasetField":..,"updateLogicAction":..}]`` and the
-    legacy object form ``{"formField":"datasetField"}``.
+    legacy object form ``{"formField":"datasetField"}``. A non-string form or
+    dataset field is coerced to None so downstream string operations are safe; the
+    None is then flagged as a shape error.
     """
+    def _str_or_none(v: object) -> Optional[str]:
+        return v if isinstance(v, str) else None
+
     data = json.loads(raw)
-    out: list[tuple] = []
+    out: list[FieldMapEntry] = []
     if isinstance(data, dict):
         for k, v in data.items():
             ds = v if isinstance(v, str) else (v.get("datasetField") if isinstance(v, dict) else None)
-            action = v.get("updateLogicAction", "REPLACE") if isinstance(v, dict) else "REPLACE"
-            out.append((k, ds, action or "REPLACE"))
+            action = v.get("updateLogicAction") if isinstance(v, dict) else None
+            out.append((_str_or_none(k), _str_or_none(ds), str(action) if action else "REPLACE"))
     elif isinstance(data, list):
         for entry in data:
             if not isinstance(entry, dict):
                 raise ValueError("field map array entries must be JSON objects")
-            out.append((
-                entry.get("formField"),
-                entry.get("datasetField"),
-                entry.get("updateLogicAction") or "REPLACE",
-            ))
+            action = entry.get("updateLogicAction")
+            out.append((_str_or_none(entry.get("formField")),
+                        _str_or_none(entry.get("datasetField")),
+                        str(action) if action else "REPLACE"))
     else:
         raise ValueError("field map must be a JSON array or object")
     return out
@@ -628,7 +641,7 @@ def _parse_data_link(dl_el, idx: int) -> DataLink:
 
 
 def _parse_block(el) -> dict:
-    block = {"_children": []}
+    block: dict = {"_children": []}
     for c in el:
         name = _localname(c.tag)
         block["_children"].append(name)
@@ -704,6 +717,25 @@ def _check_sequence(children: list[str], order: list[str], report: Report,
             high_name = name
 
 
+def _validate_block_children(children: list, allowed: set, label: str,
+                             loc: str, report: Report) -> None:
+    """An xs:all option block (idFormatOptions, caseManagementOptions) accepts only
+    a fixed set of children, each at most once; anything else is a schema error."""
+    reported: set = set()
+    for name in children:
+        if name in reported:
+            continue
+        if name not in allowed:
+            report.error("block-unexpected-child",
+                         f"<{name}> is not a valid child of <{label}>; the schema does not "
+                         "allow it here.", loc)
+        elif children.count(name) > 1:
+            report.error("block-duplicate-child",
+                         f"<{name}> appears more than once in <{label}>; the schema allows it "
+                         "at most once.", loc)
+        reported.add(name)
+
+
 def validate_dataset(ds: Dataset, forms: dict, report: Report) -> None:
     _validate_structure(ds, report)
     _validate_identity(ds, report)
@@ -732,10 +764,10 @@ def _validate_structure(ds: Dataset, report: Report) -> None:
     # unused.
     for req in ("formLinks", "dataLinks"):
         if req not in ds.definition_children:
-            report.warning("definition-formlinks-required",
-                           f"Omitting <{req}> makes the server fail the import with an internal "
-                           f"error. Include an empty <{req}/> even when it is unused.",
-                           "<definition>", fix=f"Add <{req}/>.")
+            report.error("definition-formlinks-required",
+                         f"Omitting <{req}> makes the server fail the import with an internal "
+                         f"error. Include an empty <{req}/> even when it is unused.",
+                         "<definition>", fix=f"Add <{req}/>.")
     # The <dataset> root allows only <definition> and <instance>; <instance>, when
     # present, requires a non-empty <version>.
     for name in ds.root_children:
@@ -764,7 +796,9 @@ def _validate_xsd_booleans(ds: Dataset, report: Report) -> None:
             checks.append((f"isAutoConfigured (dataLink[{dl.index}])", dl.is_auto_configured_raw,
                            f"dataLink[{dl.index}]"))
     for name, value, loc in checks:
-        if value not in (None, "") and value.strip() not in XSD_BOOLEAN_VALID:
+        # value is None only when the element is absent; a present-but-empty
+        # element ("") is itself an invalid xs:boolean and must be flagged.
+        if value is not None and value.strip() not in XSD_BOOLEAN_VALID:
             report.error("xsd-boolean-lexical",
                          f"<{name.split()[0]}> is {value!r}; an xs:boolean must be one of "
                          "true, false, 1, 0 (lowercase). The server rejects other values.", loc)
@@ -927,14 +961,29 @@ def _validate_id_format(ds: Dataset, report: Report) -> None:
         return
 
     children = fmt.get("_children", [])
+    # Schema-level checks apply regardless of discriminator: only the known
+    # children are allowed (no duplicates), and numberOfDigits is a required
+    # integer (a present-but-empty <numberOfDigits/> is an invalid xs:integer).
+    _validate_block_children(children, ID_FORMAT_ALLOWED, "idFormatOptions",
+                             "definition/idFormatOptions", report)
+    digits = fmt.get("numberOfDigits")
     if "numberOfDigits" not in children:
         report.error("idformat-digits-required",
                      "<idFormatOptions> must contain <numberOfDigits>.",
                      "definition/idFormatOptions")
+        digits_int = None
+    else:
+        try:
+            digits_int = int(digits if isinstance(digits, str) else "")
+        except ValueError:
+            digits_int = None
+            report.error("idformat-digits-number",
+                         f"Number of digits should be a whole number. Got: {digits!r}.",
+                         "definition/idFormatOptions")
 
     # idFormatOptions present normally forces ENUMERATORS; the only way it is not
     # an enumerator dataset is when caseManagementOptions is also present (CASES
-    # wins), in which case the server ignores idFormatOptions entirely.
+    # wins), in which case the server ignores the idFormatOptions value rules.
     if not _is_enumerators(ds):
         report.recommend("idformat-ignored",
                          "<idFormatOptions> is ignored because <caseManagementOptions> makes "
@@ -951,18 +1000,10 @@ def _validate_id_format(ds: Dataset, report: Report) -> None:
         report.error("idformat-suffix",
                      "Suffix can contain alphanumeric characters only and shouldn't "
                      f"exceed 10 characters. Got: {suffix!r}.", "definition/idFormatOptions")
-    digits = fmt.get("numberOfDigits")
-    if digits not in (None, ""):
-        try:
-            n = int(digits)
-            if n < 4 or n > 8:
-                report.error("idformat-digits-range",
-                             "Number of digits can't be less than 4 or higher than 8. "
-                             f"Got: {n}.", "definition/idFormatOptions")
-        except ValueError:
-            report.error("idformat-digits-number",
-                         f"Number of digits should be a number. Got: {digits!r}.",
-                         "definition/idFormatOptions")
+    if digits_int is not None and (digits_int < 4 or digits_int > 8):
+        report.error("idformat-digits-range",
+                     "Number of digits can't be less than 4 or higher than 8. "
+                     f"Got: {digits_int}.", "definition/idFormatOptions")
 
 
 def _validate_case_mgmt(ds: Dataset, report: Report) -> None:
@@ -978,6 +1019,8 @@ def _validate_case_mgmt(ds: Dataset, report: Report) -> None:
         return
 
     children = cm.get("_children", [])
+    _validate_block_children(children, CASE_MGMT_ALLOWED, "caseManagementOptions",
+                             "definition/caseManagementOptions", report)
     for req in CASE_MGMT_REQUIRED:
         if req not in children:
             report.error("casemgmt-required-child",
@@ -1144,7 +1187,8 @@ def _validate_data_links(ds: Dataset, forms: dict, report: Report) -> None:
             report.error("datalink-state-enum",
                          f"{loc}: <dataLinkState> is {dl.link_state!r}; must be ENABLED or DISABLED "
                          "(an empty element is rejected too).", loc)
-        if dl.link_format is not None and dl.link_format != "":
+        if dl.link_format is not None:
+            # A present-but-empty <dataLinkFormat/> is an invalid xs:integer too.
             if not re.match(r"^[+-]?\d+$", dl.link_format):
                 report.error("datalink-format-integer",
                              f"{loc}: <dataLinkFormat> is {dl.link_format!r}; must be an integer "
@@ -1232,8 +1276,8 @@ def _validate_field_map(ds: Dataset, dl: DataLink, report: Report, loc: str) -> 
 
     if any(f is None for f in form_fields) or any(d is None for d in dataset_fields):
         report.error("fieldmap-shape",
-                     f"{loc}: every field map entry needs both a form field and a dataset field.",
-                     loc)
+                     f"{loc}: every field map entry needs a string form field and a string "
+                     "dataset field.", loc)
 
     # SCTO-15074: a form field or dataset field must not be mapped twice.
     _flag_duplicates(form_fields, report, loc, "form field")
@@ -1351,6 +1395,7 @@ def _base_field_name(name: str) -> str:
 
 def _cross_reference_form(ds: Dataset, dl: DataLink, form_fields: list,
                           report: Report, loc: str) -> None:
+    field_map = dl.field_map or []
     by_name = {f.name: f for f in form_fields}
 
     joining = dl.joining_field
@@ -1360,9 +1405,9 @@ def _cross_reference_form(ds: Dataset, dl: DataLink, form_fields: list,
     # field must sit in this same set of repeats (or fewer): a field inside a
     # repeat that does not also enclose the joining field does not qualify.
     j_repeats = set(jfield.repeat_path) if jfield else set()
-    mapped_form_bases = {_base_field_name(ff) for ff, _df, _a in dl.field_map if ff}
+    mapped_form_bases = {_base_field_name(ff) for ff, _df, _a in field_map if ff}
 
-    for ff, _df, _a in dl.field_map:
+    for ff, _df, _a in field_map:
         if ff is None:
             continue
         base = _base_field_name(ff)

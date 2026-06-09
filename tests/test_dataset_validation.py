@@ -61,7 +61,7 @@ def _wrap(definition_body: str, instance: str = "<instance><version>1</version><
 
 VALID_DATA = _wrap(
     "<id>lookup</id><title>Lookup</title><datasetType>SERVER</datasetType>"
-    "<fieldNames>key,value</fieldNames>"
+    "<fieldNames>key,value</fieldNames><formLinks/><dataLinks/>"
 )
 
 
@@ -209,7 +209,8 @@ def test_enumerator_missing_id_format_is_warning():
     # The server defaults idFormatOptions, so its absence is a warning, not an error.
     r = _run_xml(_wrap(
         "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
-        "<fieldNames>id,name,users</fieldNames><discriminator>ENUMERATORS</discriminator>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
+        "<discriminator>ENUMERATORS</discriminator>"
         "<uniqueRecordField>id</uniqueRecordField>"))
     _expect(not r.has_errors, f"missing idFormatOptions should not be an error: {_codes(r, vd.ERROR)}")
     _expect("idformat-default-enum" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
@@ -222,7 +223,7 @@ def test_idformat_presence_infers_enumerator_and_validates():
     # inference warning is raised.
     r = _run_xml(_wrap(
         "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
-        "<fieldNames>id,name,users</fieldNames>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
         "<idFormatOptions><prefix>BAD-</prefix><numberOfDigits>6</numberOfDigits></idFormatOptions>"
         "<discriminator>DATA</discriminator>"))
     _expect("idformat-prefix" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
@@ -233,7 +234,7 @@ def test_idformat_presence_infers_enumerator_and_validates():
 def test_enumerator_prefix_and_digits_rules():
     r = _run_xml(_wrap(
         "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
-        "<fieldNames>id,name,users</fieldNames>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
         "<idFormatOptions><prefix>ENU-</prefix><numberOfDigits>2</numberOfDigits></idFormatOptions>"
         "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>id</uniqueRecordField>"))
     codes = _codes(r, vd.ERROR)
@@ -245,7 +246,7 @@ def test_enumerator_prefix_and_digits_rules():
 def test_enumerator_valid_clean():
     r = _run_xml(_wrap(
         "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
-        "<fieldNames>id,name,users</fieldNames>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
         "<idFormatOptions><prefix>ENU</prefix><numberOfDigits>6</numberOfDigits></idFormatOptions>"
         "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>id</uniqueRecordField>"))
     _expect(not r.has_errors, _codes(r, vd.ERROR))
@@ -255,7 +256,7 @@ def test_enumerator_valid_clean():
 def test_enumerator_missing_users_is_warning_not_error():
     r = _run_xml(_wrap(
         "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
-        "<fieldNames>id,name</fieldNames>"
+        "<fieldNames>id,name</fieldNames><formLinks/><dataLinks/>"
         "<idFormatOptions><numberOfDigits>6</numberOfDigits></idFormatOptions>"
         "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>id</uniqueRecordField>"))
     _expect(not r.has_errors, f"missing users should not be an error: {_codes(r, vd.ERROR)}")
@@ -268,7 +269,7 @@ def test_enumerator_missing_required_id_is_warning():
     # insert time, so this is a warning under server-truth tiering.
     r = _run_xml(_wrap(
         "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
-        "<fieldNames>name,users</fieldNames>"
+        "<fieldNames>name,users</fieldNames><formLinks/><dataLinks/>"
         "<idFormatOptions><numberOfDigits>6</numberOfDigits></idFormatOptions>"
         "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>id</uniqueRecordField>"))
     _expect(not r.has_errors, f"missing id column should not be an error: {_codes(r, vd.ERROR)}")
@@ -280,7 +281,7 @@ def test_enumerator_unicode_prefix_accepted():
     # The server uses Apache isAlphanumeric (Unicode), so an accented prefix is valid.
     r = _run_xml(_wrap(
         "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
-        "<fieldNames>id,name,users</fieldNames>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
         "<idFormatOptions><prefix>Énu</prefix><numberOfDigits>6</numberOfDigits></idFormatOptions>"
         "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>id</uniqueRecordField>"))
     _expect("idformat-prefix" not in _codes(r, vd.ERROR),
@@ -341,7 +342,7 @@ def test_cases_missing_required_column_is_warning():
     # runtime, so this is a warning, not an upload-blocking error.
     r = _run_xml(_wrap(
         "<id>cases</id><title>C</title><datasetType>SERVER</datasetType>"
-        "<fieldNames>id,label</fieldNames>"
+        "<fieldNames>id,label</fieldNames><formLinks/><dataLinks/>"
         "<caseManagementOptions><displayMode>tree</displayMode>"
         "<showFinalizedSentWhenTree>true</showFinalizedSentWhenTree>"
         "<showColumnsWhenTable/></caseManagementOptions>"
@@ -399,10 +400,59 @@ def test_offline_updates_not_required_for_cases_dataset():
 
 
 @test
-def test_missing_formlinks_datalinks_warned():
+def test_empty_typed_elements_rejected():
+    # Present-but-empty xs:boolean / xs:integer elements are invalid per the schema.
+    r = _run_xml(_wrap(
+        "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
+        "<idFormatOptions><numberOfDigits/></idFormatOptions>"
+        "<discriminator>ENUMERATORS</discriminator><allowOfflineUpdates/>"))
+    codes = _codes(r, vd.ERROR)
+    _expect("xsd-boolean-lexical" in codes, codes)        # empty <allowOfflineUpdates/>
+    _expect("idformat-digits-number" in codes, codes)     # empty <numberOfDigits/>
+
+
+@test
+def test_empty_datalinkformat_rejected():
+    fm = '[{"formField":"a","datasetField":"key"}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat/>"
+        f"<linkObjectId>f</linkObjectId><fieldMap>{fm}</fieldMap></dataLink></dataLinks>")
+    _expect("datalink-format-integer" in _codes(_run_xml(xml), vd.ERROR), "empty dataLinkFormat not flagged")
+
+
+@test
+def test_option_block_unknown_and_duplicate_children_rejected():
+    r = _run_xml(_wrap(
+        "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
+        "<idFormatOptions><numberOfDigits>6</numberOfDigits><numberOfDigits>7</numberOfDigits>"
+        "<bogus>x</bogus></idFormatOptions><discriminator>ENUMERATORS</discriminator>"))
+    codes = _codes(r, vd.ERROR)
+    _expect("block-unexpected-child" in codes, codes)
+    _expect("block-duplicate-child" in codes, codes)
+
+
+@test
+def test_non_string_field_map_value_is_shape_error_not_crash():
+    fm = '[{"formField":"a","datasetField":123}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>k</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f</linkObjectId>"
+        f"<fieldMap>{fm}</fieldMap></dataLink></dataLinks>")
+    r = _run_xml(xml)  # must not raise
+    _expect("fieldmap-shape" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_missing_formlinks_datalinks_is_error():
+    # Omitting <formLinks>/<dataLinks> makes the import fail with a server error.
     r = _run_xml(_wrap(
         "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"))
-    _expect("definition-formlinks-required" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+    _expect("definition-formlinks-required" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
 
 
 @test
@@ -868,7 +918,7 @@ def test_cross_reference_clean_when_consistent():
           '{"formField":"area_ha*","datasetField":"area_ha*","updateLogicAction":"REPLACE"}]')
     xml = _wrap(
         "<id>plots</id><title>P</title><datasetType>SERVER</datasetType>"
-        "<fieldNames>plot_id_key,area_ha</fieldNames>"
+        "<fieldNames>plot_id_key,area_ha</fieldNames><formLinks/>"
         "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
         "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
         f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap>"
