@@ -66,6 +66,32 @@ _PII_WARNING = (
     "is acceptable for their data-governance rules."
 )
 
+_PII_WARNING_LOCAL = (
+    "PRIVACY: translation runs on-device (provider='local'); the cell text is NOT "
+    "sent to OpenAI or any third party. The output CSV and cache file still hold "
+    "the text, so keep them with the user's data and out of shared locations."
+)
+
+
+def _pii_warning(provider: str) -> str:
+    """Provider-appropriate privacy notice (local mode must not claim an upload)."""
+    return _PII_WARNING_LOCAL if provider == "local" else _PII_WARNING
+
+
+# --- on-device (local) translation via NLLB-200 (EXPERIMENT) ----------------
+# A pip-only, cross-OS alternative to the cloud path for data-residency use. NLLB
+# is an encoder-decoder NMT model that needs the source language, so the local
+# path detects it per text (langdetect) and maps it to NLLB's FLORES-200 code.
+_LOCAL_DEFAULT_MODEL = "facebook/nllb-200-distilled-600M"
+_NLLB_LANG = {  # ISO 639-1 -> NLLB FLORES-200 code, common survey languages
+    "en": "eng_Latn", "es": "spa_Latn", "fr": "fra_Latn", "pt": "por_Latn",
+    "ar": "arb_Arab", "sw": "swh_Latn", "hi": "hin_Deva", "id": "ind_Latn",
+    "am": "amh_Ethi", "ne": "npi_Deva", "bn": "ben_Beng", "fa": "pes_Arab",
+    "ur": "urd_Arab", "ru": "rus_Cyrl", "tr": "tur_Latn", "vi": "vie_Latn",
+    "zh": "zho_Hans", "ha": "hau_Latn", "yo": "yor_Latn", "ig": "ibo_Latn",
+    "ti": "tir_Ethi", "so": "som_Latn", "km": "khm_Khmr", "lo": "lao_Laoo",
+}
+
 _DEFAULT_BATCH_SIZE = 40
 _MAX_RETRIES = 2
 
@@ -140,13 +166,14 @@ def _usd_display(usd: float) -> str:
 
 
 def estimate_cost(csv_path: str, columns: list[str], target_language: str,
-                  model: str | None = None) -> dict:
+                  model: str | None = None, provider: str = "openai") -> dict:
     """Estimate translation cost (token-based, approximate).
 
     OpenAI bills per token, so this is a rough estimate from character counts
     (~4 chars/token, input and output). De-duplication is not modeled, so the
-    real cost is usually lower. Returns ``billable_chars``, ``cells_to_translate``,
-    ``estimated_usd``, ``model``, ``target_language``, ``pii_warning``.
+    real cost is usually lower. ``provider='local'`` (on-device NLLB) is free.
+    Returns ``billable_chars``, ``cells_to_translate``, ``estimated_usd``,
+    ``model``, ``target_language``, ``pii_warning``.
     """
     spec = resolve_model(model)
     fieldnames, rows = _read_csv(csv_path)
@@ -165,17 +192,19 @@ def estimate_cost(csv_path: str, columns: list[str], target_language: str,
             cells += 1
     tok_in = billable / 4 + cells * 12   # rough: text + per-item overhead
     tok_out = billable / 4               # translation ~ similar length
-    usd = tok_in / 1e6 * spec["in_per_mtok"] + tok_out / 1e6 * spec["out_per_mtok"]
+    usd = 0.0 if provider == "local" else (
+        tok_in / 1e6 * spec["in_per_mtok"] + tok_out / 1e6 * spec["out_per_mtok"])
     return {
         "billable_chars": billable,
         "cells_to_translate": cells,
         "cells_skipped": skipped,  # empty/numeric/survey-code cells not sent
         "estimated_usd": round(usd, 4),
-        "estimated_usd_display": _usd_display(usd),
-        "model": spec["id"],
+        "estimated_usd_display": "$0.00 (free, on-device)" if provider == "local" else _usd_display(usd),
+        "model": f"local:{model or 'nllb-200-distilled-600M'}" if provider == "local" else spec["id"],
         "target_language": target_language,
-        "pii_warning": _PII_WARNING,
-        "note": "Token-based estimate; de-duplication usually makes the real cost lower.",
+        "pii_warning": _pii_warning(provider),
+        "note": ("On-device NLLB; free, runs locally." if provider == "local"
+                 else "Token-based estimate; de-duplication usually makes the real cost lower."),
     }
 
 
@@ -259,6 +288,40 @@ def _get_client(client):
     return OpenAI()
 
 
+class _LocalTranslator:
+    """On-device NLLB translator. Loads transformers + the model lazily (so the
+    module still imports stdlib-only) and detects each text's source language."""
+
+    def __init__(self, target_language: str, model_name: str | None = None):
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # noqa: PLC0415
+        self._name = model_name or _LOCAL_DEFAULT_MODEL
+        self._tok = AutoTokenizer.from_pretrained(self._name)
+        self._model = AutoModelForSeq2SeqLM.from_pretrained(self._name)
+        tgt = _NLLB_LANG.get(target_language)
+        if tgt is None:
+            raise RuntimeError(
+                f"local translation target '{target_language}' is not in the NLLB "
+                "language map; use the cloud provider or a supported target.")
+        self._tgt_id = self._tok.convert_tokens_to_ids(tgt)
+
+    def _detect(self, text: str) -> str:
+        from langdetect import detect  # noqa: PLC0415
+        try:
+            return _NLLB_LANG.get(detect(text), "eng_Latn")
+        except Exception:  # noqa: BLE001 - detection failure -> assume English
+            return "eng_Latn"
+
+    def translate(self, texts: list[str], target_language: str) -> list[str]:
+        out = []
+        for t in texts:
+            self._tok.src_lang = self._detect(t)
+            enc = self._tok(t, return_tensors="pt", truncation=True, max_length=512)
+            gen = self._model.generate(**enc, forced_bos_token_id=self._tgt_id,
+                                       max_length=512)
+            out.append(self._tok.batch_decode(gen, skip_special_tokens=True)[0])
+        return out
+
+
 def _is_retryable(exc: Exception) -> bool:
     if isinstance(exc, _NON_RETRYABLE_TYPES):
         return False
@@ -337,13 +400,15 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
                   model: str | None = None, glossary_path: str | None = None,
                   cache_path: str | None = None, client=None, confirm: bool = False,
                   batch_size: int = _DEFAULT_BATCH_SIZE,
-                  max_retries: int = _MAX_RETRIES) -> dict:
+                  max_retries: int = _MAX_RETRIES,
+                  provider: str = "openai", local_translator=None) -> dict:
     """Translate ``columns`` in a CSV and write the result to ``output_path``.
 
     Adds a ``<column>_<target_language>`` column next to each source column;
     never overwrites. Skips skip-list cells. Caches raw translations (keyed on
     source/target language + model + text hash); the glossary is applied as a
-    re-runnable overlay on every resolution.
+    re-runnable overlay on every resolution. ``provider='local'`` translates
+    on-device via NLLB (free, no upload); the source language is auto-detected.
 
     :raises PermissionError: If ``confirm`` is not ``True``.
     """
@@ -352,7 +417,7 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
             "translate_csv requires confirm=True. Run estimate_cost(), show the "
             "user the cost and PII warning, and only proceed after confirmation.")
     spec = resolve_model(model)
-    model_id = spec["id"]
+    model_id = f"local:{model or 'nllb-200-distilled-600M'}" if provider == "local" else spec["id"]
     fieldnames, rows = _read_csv(csv_path)
     columns = list(dict.fromkeys(columns))
     _require_columns(fieldnames, columns)
@@ -402,16 +467,23 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
                     to_translate.setdefault(text, []).append((i, oc))
 
         client_obj = None
+        translator = local_translator  # may be injected for tests
         pending = list(to_translate)
         tok_in_total = 0
         tok_out_total = 0
         have_usage = True
         for start in range(0, len(pending), batch_size):
             chunk = pending[start:start + batch_size]
-            if client_obj is None:
-                client_obj = _get_client(client)
-            results, usage = _translate_batch(client_obj, chunk, target_language,
-                                              source_language, model_id, max_retries)
+            if provider == "local":
+                if translator is None:
+                    translator = _LocalTranslator(target_language, model)
+                results = translator.translate(chunk, target_language)
+                usage = None  # on-device: no token billing
+            else:
+                if client_obj is None:
+                    client_obj = _get_client(client)
+                results, usage = _translate_batch(client_obj, chunk, target_language,
+                                                  source_language, model_id, max_retries)
             if usage is None:
                 have_usage = False
             else:
@@ -446,10 +518,14 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
     stats["model"] = model_id
     stats["output_path"] = output_path
 
-    # actual spend: bill on real tokens when the responses reported usage,
-    # otherwise fall back to a character-based approximation of what was sent
-    # (uses the same per-token formula; the dollar figure is approximate)
-    if stats["cells_translated"] > 0:
+    # actual spend: the local (on-device) provider is free and records nothing;
+    # otherwise bill on real tokens when usage was reported, else a character-
+    # based approximation (same per-token formula; the dollar figure is approximate)
+    if provider == "local":
+        s = usage_ledger.summary()
+        spend = {"run_usd": 0.0, "run_usd_display": "$0.00",
+                 "total_usd": s["total_usd"], "total_usd_display": s["total_usd_display"]}
+    elif stats["cells_translated"] > 0:
         if have_usage and (tok_in_total or tok_out_total):
             actual_usd = (tok_in_total / 1e6 * spec["in_per_mtok"]
                           + tok_out_total / 1e6 * spec["out_per_mtok"])
@@ -489,6 +565,8 @@ def _main(argv: list[str]) -> int:
     pe.add_argument("--columns", required=True, help="comma-separated column names to translate")
     pe.add_argument("--target", required=True, help="target language ISO code (en, es, fr, ...)")
     pe.add_argument("--model", default=None, help="cheap (default, gpt-4.1-nano) | better | model id")
+    pe.add_argument("--provider", default="openai", choices=["openai", "local"],
+                    help="openai (default) or local (on-device NLLB, free)")
     pt = sub.add_parser("translate", help="translate the columns and write a new CSV")
     pt.add_argument("csv_path", help="path to the exported CSV")
     pt.add_argument("--columns", required=True, help="comma-separated column names to translate")
@@ -496,25 +574,28 @@ def _main(argv: list[str]) -> int:
     pt.add_argument("--source", default=None, help="source language ISO code; omit to auto-detect")
     pt.add_argument("--output", required=True, help="path for the result CSV (adds <col>_<target> columns)")
     pt.add_argument("--model", default=None, help="cheap (default, gpt-4.1-nano) | better | model id")
+    pt.add_argument("--provider", default="openai", choices=["openai", "local"],
+                    help="openai (default) or local (on-device NLLB, free, no upload)")
     pt.add_argument("--glossary", default=None, help="optional CSV with source,target term overrides")
     pt.add_argument("--cache", default=None, help="optional SQLite cache path so re-runs are cheap")
     pt.add_argument("--confirm", action="store_true", help="required: confirms you accepted the cost/PII")
     args = p.parse_args(argv)
     if args.cmd == "estimate":
         print(json.dumps(estimate_cost(args.csv_path, args.columns.split(","),
-                                       args.target, args.model), indent=2))
+                                       args.target, args.model, provider=args.provider), indent=2))
         return 0
     if args.cmd == "translate":
         if not args.confirm:
             print("Refusing to translate without --confirm. Run 'estimate' first.",
                   file=sys.stderr)
             return 1
-        import openai_auth
-        openai_auth.configure_openai()
+        if args.provider == "openai":
+            import openai_auth
+            openai_auth.configure_openai()
         print(json.dumps(translate_csv(
             args.csv_path, args.columns.split(","), args.target, args.source,
             args.output, model=args.model, glossary_path=args.glossary,
-            cache_path=args.cache, confirm=True), indent=2))
+            cache_path=args.cache, confirm=True, provider=args.provider), indent=2))
         return 0
     return 2
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline tests for OpenAI transcription.
+"""Offline tests for OpenAI/local transcription.
 
 A fake OpenAI audio client and monkeypatched ffmpeg/ffprobe shims let these run
 with no network, no openai package, and no ffmpeg. Cover: model resolution, cost
@@ -77,7 +77,15 @@ def test_estimate_cost() -> None:
             assert est["unknown_duration"] == ["/no/such.mp3"]
             assert est["estimated_usd"] == round(2.0 * 0.003, 4), est
             assert est["estimated_usd_display"] == "< $0.01", est  # 0.006 is sub-cent
-            assert "PRIVACY" in est["pii_warning"] and "sent to OpenAI" in est["pii_warning"]
+            assert "PRIVACY" in est["pii_warning"]
+            # local provider is free
+            loc = X.estimate_cost([str(a)], provider="local")
+            assert loc["estimated_usd"] == 0.0 and "free" in loc["estimated_usd_display"], loc
+            # local mode must NOT claim the audio is uploaded; cloud mode must
+            assert "will be sent to OpenAI" in est["pii_warning"], est
+            assert "on-device" in loc["pii_warning"], loc
+            assert "NOT sent to OpenAI" in loc["pii_warning"], loc
+            assert "will be sent to OpenAI" not in loc["pii_warning"], loc
         assert X._usd_display(0.024) == "$0.02" and X._usd_display(0.0) == "$0.00"
     finally:
         X._audio_duration_seconds = orig
@@ -314,13 +322,17 @@ def test_actual_spend_billed_on_audio_minutes() -> None:
             assert abs(s["actual_usd"] - 0.006) < 1e-6, s
             assert s["actual_usd_display"] == "< $0.01"
             assert abs(s["total_spend_usd"] - 0.006) < 1e-6, s
-            # a fully-cached re-run records nothing (no API call) but reports the total
-            cache = Path(d) / "c.db"
-            X.transcribe_files([str(a)], str(out), cache_path=str(cache), confirm=True, client=FakeClient())
-            before = X.usage_ledger.summary()["total_usd"]
-            s2 = X.transcribe_files([str(a)], str(out), cache_path=str(cache), confirm=True, client=FakeClient())
-            assert s2["cached"] == 1 and s2["actual_usd"] == 0.0, s2
-            assert abs(s2["total_spend_usd"] - before) < 1e-6, s2  # unchanged by a cached run
+            # local provider must record nothing (free) but still report the total
+            orig_local = X._transcribe_local_file
+            X._transcribe_local_file = lambda path, lm: "on-device text"
+            try:
+                b = Path(d) / "b.mp3"; b.write_bytes(b"y"); out2 = Path(d) / "o2.csv"
+                s2 = X.transcribe_files([str(b)], str(out2), provider="local", confirm=True,
+                                        client=FakeClient())
+                assert s2["transcribed"] == 1 and s2["actual_usd"] == 0.0, s2
+                assert abs(s2["total_spend_usd"] - 0.006) < 1e-6, s2  # unchanged by local run
+            finally:
+                X._transcribe_local_file = orig_local
     finally:
         X._audio_duration_seconds = orig
 

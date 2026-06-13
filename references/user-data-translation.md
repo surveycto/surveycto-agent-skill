@@ -41,6 +41,20 @@ Translation uses an OpenAI chat model. The user can pick:
 Pass `--model cheap|better` (or an explicit model id). Default to `cheap` and
 only suggest `better` if the user reports quality concerns on nuanced text.
 
+### On-device provider (NLLB, EXPERIMENT)
+
+`--provider local` translates on-device with NLLB-200 (distilled-600M) instead of
+OpenAI: no API key, no cost, and the cell text never leaves the machine, for
+data-residency or offline use. Install the dependencies once with
+`python3 setup_env.py --local-translate` (pip-only: transformers, torch,
+sentencepiece, langdetect; cross-platform, no separate runtime). The source
+language is auto-detected per cell; the target must be a language NLLB supports
+(common survey languages are mapped). Quality is good on straightforward survey
+text and close to the cloud models, but weaker on idiomatic or code-switched
+text, so recommend a fluent-speaker spot-check for high-stakes use. Run
+`python3 system_check.py` to confirm the machine has enough RAM (~3 GB). This is
+experimental; the cloud provider remains the default and the most accurate.
+
 ## What the module gives you
 
 - `estimate_cost(csv_path, columns, target_language, model=None)` counts billable
