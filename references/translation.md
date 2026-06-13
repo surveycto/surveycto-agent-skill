@@ -28,7 +28,7 @@ For form labels, the agent should translate directly. Form labels are:
 - **Low-volume.** A typical XLSForm has 50–500 labels; the whole form fits in your context.
 - **Non-sensitive.** No PII, no respondent data, no third-party data transfer concerns.
 - **Quality-sensitive in ways that benefit from contextual reasoning** — terminology consistency, register, idiomatic phrasing, cultural adaptation. A per-cell translation API cannot see the whole form at once.
-- **Free of credential setup.** No reason to push users into a Google Cloud Console workflow they shouldn't need.
+- **Free of credential setup.** No reason to push users into an external cloud-API setup they shouldn't need.
 
 This is different from translating *response data*, where volume can be large, content can be sensitive, and per-cell determinism is an asset. Don't confuse the two.
 

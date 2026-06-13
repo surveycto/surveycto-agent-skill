@@ -19,11 +19,9 @@ __pycache__/
 # Kilo agent config
 .kilo/
 
-# Google Cloud credentials (contents are secret; never commit)
-*-key.json
-*-credentials.json
-google-credentials*.json
-service-account*.json
+# OpenAI credentials (the API key is secret; never commit)
+openai-config.json
+*.openai-key
 
 # Translation / transcription caches (contain source text or transcripts)
 translation-cache.db

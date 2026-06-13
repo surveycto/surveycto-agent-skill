@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Offline tests for audio transcription.
+"""Offline tests for OpenAI/local transcription.
 
-A fake adapter stands in for google-cloud-speech, and WAV fixtures are built
-with the stdlib ``wave`` module, so these tests run with no Google packages and
-no network. They cover WAV duration/cost, unknown-duration handling, the
-cost-confirmation gate, the happy path, caching, per-file failure isolation,
-and the inline size limit.
+A fake OpenAI audio client and monkeypatched ffmpeg/ffprobe shims let these run
+with no network, no openai package, and no ffmpeg. Cover: model resolution, cost
+estimate, single-request happy path, per-file failure isolation, the confirm
+gate, sanitized errors, the fits-whole decision, and the adaptive recursive
+split that handles audio the model rejects as too large.
 
 Run: python3 tests/test_transcription.py
 """
@@ -15,289 +15,342 @@ from __future__ import annotations
 import csv
 import sys
 import tempfile
-import wave
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "assets" / "google-cloud"))
+sys.path.insert(0, str(REPO_ROOT / "assets" / "transcribe-translate"))
 
-import transcription  # noqa: E402
+import transcription as X  # noqa: E402
+import usage_ledger as _UL  # noqa: E402  (same module object X imported)
 
-
-class FakeSpeechAdapter:
-    """Mimics the transcription adapter contract."""
-
-    def __init__(self, transcript="hello world", confidence=0.95):
-        self.calls = []
-        self._transcript = transcript
-        self._confidence = confidence
-
-    def transcribe(self, content, language_code, encoding, sample_rate, model):
-        self.calls.append(
-            {
-                "len": len(content),
-                "language_code": language_code,
-                "encoding": encoding,
-                "sample_rate": sample_rate,
-                "model": model,
-            }
-        )
-        return {"transcript": self._transcript, "confidence": self._confidence}
+# Redirect the spend ledger to a throwaway path so tests never touch the real
+# ~/.surveycto-skill ledger and stay hermetic.
+_UL.LEDGER_DIR = Path(tempfile.mkdtemp())
+_UL.LEDGER_PATH = _UL.LEDGER_DIR / "spend-ledger.json"
 
 
-def _make_wav(path: Path, seconds: float = 1.0, rate: int = 8000) -> None:
-    with wave.open(str(path), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(rate)
-        w.writeframes(b"\x00\x00" * int(rate * seconds))
+class BadRequestError(Exception):
+    """Named to match the OpenAI SDK error class _is_too_large_error checks for."""
 
 
-def _read_csv(path: Path):
+class _Resp:
+    def __init__(self, text): self.text = text
+class _Transcriptions:
+    def __init__(self, handler): self._h = handler; self.calls = []
+    def create(self, model, file):
+        data = file.read()
+        self.calls.append(len(data))
+        return _Resp(self._h(data))
+class _Audio:
+    def __init__(self, tr): self.transcriptions = tr
+class FakeClient:
+    def __init__(self, handler=None):
+        handler = handler or (lambda data: "hello world transcript")
+        self.transcriptions = _Transcriptions(handler)
+        self.audio = _Audio(self.transcriptions)
+
+
+def _read(path):
     with open(path, newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
 
 
-def test_wav_duration_and_cost() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        a = Path(d) / "a.wav"
-        _make_wav(a, seconds=20.0)  # 20s -> 2 billed 15s increments
-        est = transcription.estimate_cost([str(a)])
-        assert abs(est["known_seconds"] - 20.0) < 0.01, est
-        assert est["estimated_usd"] == round(2 * 0.016, 4), est
-        assert est["within_free_tier"] is True
-        assert est["unknown_duration"] == []
-        assert "PRIVACY" in est["pii_warning"]
+def test_resolve_model() -> None:
+    assert X.resolve_model(None)["id"] == "gpt-4o-mini-transcribe"
+    assert X.resolve_model("fast")["id"] == "gpt-4o-mini-transcribe"
+    assert X.resolve_model("whisper")["id"] == "whisper-1"
+    assert X.resolve_model("whisper")["max_duration_sec"] is None
+    assert X.resolve_model("accurate")["max_duration_sec"] == X._GPT4O_MAX_DURATION_SEC
+    explicit = X.resolve_model("gpt-4o-transcribe")
+    assert explicit["id"] == "gpt-4o-transcribe" and explicit["max_duration_sec"] is not None
+    assert X.resolve_model("whisper-large-v3")["max_duration_sec"] is None
 
 
-def test_unknown_duration_listed() -> None:
-    est = transcription.estimate_cost(["/no/such/file.wav", "/also/missing.mp3"])
-    assert est["files"] == 2
-    assert set(est["unknown_duration"]) == {
-        "/no/such/file.wav",
-        "/also/missing.mp3",
-    }
-    assert est["estimated_usd"] == 0.0
-
-
-def test_billed_increments_rounds_up() -> None:
-    assert transcription._billed_increments(1) == 1
-    assert transcription._billed_increments(15) == 1
-    assert transcription._billed_increments(16) == 2
-    assert transcription._billed_increments(30) == 2
-    assert transcription._billed_increments(31) == 3
-
-
-def test_transcribe_requires_confirm() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        a = Path(d) / "a.wav"
-        out = Path(d) / "out.csv"
-        _make_wav(a)
-        try:
-            transcription.transcribe_files(
-                [str(a)], "en-US", str(out), client=FakeSpeechAdapter()
-            )
-        except PermissionError:
-            assert not out.exists()
-            return
-        raise AssertionError("expected PermissionError without confirm=True")
-
-
-def test_transcribe_happy_path() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        a = Path(d) / "a.wav"
-        b = Path(d) / "b.wav"
-        out = Path(d) / "out.csv"
-        _make_wav(a, seconds=2.0)
-        _make_wav(b, seconds=3.0)
-        adapter = FakeSpeechAdapter(transcript="some words")
-        stats = transcription.transcribe_files(
-            [str(a), str(b)], "en-US", str(out),
-            client=adapter, confirm=True,
-        )
-        assert stats["transcribed"] == 2, stats
-        assert stats["failed"] == 0, stats
-        rows = _read_csv(out)
-        assert len(rows) == 2
-        assert rows[0]["transcript"] == "some words"
-        assert rows[0]["status"] == "ok"
-        # WAV sample rate is passed through to the adapter
-        assert adapter.calls[0]["sample_rate"] == 8000
-        assert adapter.calls[0]["encoding"] == "LINEAR16"
-
-
-def test_transcribe_caches() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        a = Path(d) / "a.wav"
-        out1 = Path(d) / "out1.csv"
-        out2 = Path(d) / "out2.csv"
-        cache = Path(d) / "cache.db"
-        _make_wav(a, seconds=2.0)
-
-        a1 = FakeSpeechAdapter(transcript="cached words")
-        s1 = transcription.transcribe_files(
-            [str(a)], "en-US", str(out1),
-            client=a1, cache_path=str(cache), confirm=True,
-        )
-        assert s1["transcribed"] == 1 and s1["cached"] == 0
-
-        a2 = FakeSpeechAdapter(transcript="SHOULD NOT BE USED")
-        s2 = transcription.transcribe_files(
-            [str(a)], "en-US", str(out2),
-            client=a2, cache_path=str(cache), confirm=True,
-        )
-        assert s2["cached"] == 1, s2
-        assert s2["transcribed"] == 0, s2
-        assert a2.calls == [], "cached run should not call the adapter"
-        rows = _read_csv(out2)
-        assert rows[0]["transcript"] == "cached words"
-
-
-def test_failure_isolated_per_file() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        good = Path(d) / "good.wav"
-        out = Path(d) / "out.csv"
-        _make_wav(good, seconds=1.0)
-        missing = str(Path(d) / "missing.wav")
-        stats = transcription.transcribe_files(
-            [missing, str(good)], "en-US", str(out),
-            client=FakeSpeechAdapter(), confirm=True,
-        )
-        assert stats["failed"] == 1, stats
-        assert stats["transcribed"] == 1, stats
-        rows = _read_csv(out)
-        by_file = {Path(r["file"]).name: r for r in rows}
-        assert by_file["missing.wav"]["status"].startswith("error")
-        assert by_file["missing.wav"]["transcript"] == ""
-        assert by_file["good.wav"]["status"] == "ok"
-
-
-def test_inline_size_limit() -> None:
-    original = transcription._MAX_INLINE_BYTES
-    transcription._MAX_INLINE_BYTES = 10  # tiny, to trigger the guard
+def test_estimate_cost() -> None:
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 120.0  # 2 min each
     try:
         with tempfile.TemporaryDirectory() as d:
-            a = Path(d) / "a.wav"
-            out = Path(d) / "out.csv"
-            _make_wav(a, seconds=1.0)  # well over 10 bytes
-            stats = transcription.transcribe_files(
-                [str(a)], "en-US", str(out),
-                client=FakeSpeechAdapter(), confirm=True,
-            )
-            assert stats["failed"] == 1, stats
-            rows = _read_csv(out)
-            assert "inline size limit" in rows[0]["status"]
+            a = Path(d) / "a.mp3"; a.write_bytes(b"audio")
+            est = X.estimate_cost([str(a), "/no/such.mp3"], model="fast")
+            assert abs(est["known_seconds"] - 120.0) < 0.01, est
+            assert est["unknown_duration"] == ["/no/such.mp3"]
+            assert est["estimated_usd"] == round(2.0 * 0.003, 4), est
+            assert est["estimated_usd_display"] == "< $0.01", est  # 0.006 is sub-cent
+            assert "PRIVACY" in est["pii_warning"]
+            # local provider is free
+            loc = X.estimate_cost([str(a)], provider="local")
+            assert loc["estimated_usd"] == 0.0 and "free" in loc["estimated_usd_display"], loc
+            # local mode must NOT claim the audio is uploaded; cloud mode must
+            assert "will be sent to OpenAI" in est["pii_warning"], est
+            assert "on-device" in loc["pii_warning"], loc
+            assert "NOT sent to OpenAI" in loc["pii_warning"], loc
+            assert "will be sent to OpenAI" not in loc["pii_warning"], loc
+        assert X._usd_display(0.024) == "$0.02" and X._usd_display(0.0) == "$0.00"
     finally:
-        transcription._MAX_INLINE_BYTES = original
+        X._audio_duration_seconds = orig
 
 
-def test_transcribe_file_single() -> None:
+def test_transcribe_happy_path_and_cache() -> None:
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 30.0
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"some audio bytes")
+            out = Path(d) / "o.csv"; cache = Path(d) / "c.db"
+            c = FakeClient(lambda data: "the borehole is dry")
+            s = X.transcribe_files([str(a)], str(out), cache_path=str(cache),
+                                   confirm=True, client=c)
+            assert s["transcribed"] == 1 and s["failed"] == 0, s
+            r = _read(out)
+            assert r[0]["transcript"] == "the borehole is dry" and r[0]["status"] == "ok"
+            assert r[0]["backend"] == "gpt-4o-mini-transcribe"
+            # cached re-run: no client calls
+            c2 = FakeClient(lambda data: "SHOULD NOT BE USED")
+            out2 = Path(d) / "o2.csv"
+            s2 = X.transcribe_files([str(a)], str(out2), cache_path=str(cache),
+                                    confirm=True, client=c2)
+            assert s2["cached"] == 1 and s2["transcribed"] == 0
+            assert c2.transcriptions.calls == []
+            assert _read(out2)[0]["transcript"] == "the borehole is dry"
+    finally:
+        X._audio_duration_seconds = orig
+
+
+def test_confirm_gate() -> None:
     with tempfile.TemporaryDirectory() as d:
-        a = Path(d) / "a.wav"
-        _make_wav(a, seconds=4.0)
-        res = transcription.transcribe_file(
-            str(a), "en-US", client=FakeSpeechAdapter(transcript="one two"),
-            confirm=True,
-        )
-        assert res["transcript"] == "one two"
-        assert res["status"] == "ok"
-        assert abs(res["duration_seconds"] - 4.0) < 0.01
-
-
-def test_transcribe_file_requires_confirm() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        a = Path(d) / "a.wav"
-        _make_wav(a, seconds=1.0)
+        a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
         try:
-            transcription.transcribe_file(
-                str(a), "en-US", client=FakeSpeechAdapter()
-            )
+            X.transcribe_files([str(a)], str(out), confirm=False, client=FakeClient())
         except PermissionError:
-            return
-        raise AssertionError("expected PermissionError without confirm=True")
+            assert not out.exists(); return
+        raise AssertionError("expected PermissionError without confirm")
 
 
-def test_non_numeric_confidence_is_coerced() -> None:
-    class WeirdAdapter:
-        def transcribe(self, content, language_code, encoding, sample_rate, model):
-            return {"transcript": "some text", "confidence": "high"}
+def test_failure_isolated_and_sanitized() -> None:
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 10.0
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            good = Path(d) / "good.mp3"; good.write_bytes(b"ok")
+            out = Path(d) / "o.csv"
+            missing = str(Path(d) / "missing.mp3")
+            leaky = FakeClient(lambda data: (_ for _ in ()).throw(Exception("SECRET_AUDIO_CONTENT")))
+            # good file uses a separate client that succeeds
+            # run missing + a file whose client raises a secret-bearing error
+            bad = Path(d) / "bad.mp3"; bad.write_bytes(b"bad")
+            s = X.transcribe_files([missing, str(bad)], str(out), confirm=True, client=leaky)
+            assert s["failed"] == 2, s
+            by = {Path(r["file"]).name: r for r in _read(out)}
+            assert by["missing.mp3"]["status"].startswith("error")
+            assert "transcription failed" in by["bad.mp3"]["status"]
+            assert "SECRET_AUDIO_CONTENT" not in by["bad.mp3"]["status"], "leaked content"
+    finally:
+        X._audio_duration_seconds = orig
 
+
+def test_fits_whole() -> None:
+    orig_g = X.os.path.getsize; orig_d = X._audio_duration_seconds
+    try:
+        X.os.path.getsize = lambda p: 1000
+        X._audio_duration_seconds = lambda p: 100.0
+        assert X._fits_whole("x", X.resolve_model("fast")) is True          # small+short
+        X._audio_duration_seconds = lambda p: 5000.0                        # 83 min
+        assert X._fits_whole("x", X.resolve_model("fast")) is False         # over gpt-4o cap
+        assert X._fits_whole("x", X.resolve_model("whisper")) is True       # whisper: no dur cap
+        X.os.path.getsize = lambda p: X._MAX_BYTES + 1
+        X._audio_duration_seconds = lambda p: 10.0
+        assert X._fits_whole("x", X.resolve_model("whisper")) is False      # over size
+    finally:
+        X.os.path.getsize = orig_g; X._audio_duration_seconds = orig_d
+
+
+def test_adaptive_split_succeeds_on_too_large() -> None:
+    # fake ffmpeg: write `length` bytes; fake client: reject >40 bytes as too-large
+    orig_ex = X._extract_chunk
+    THRESH = 40
+    X._extract_chunk = lambda src, start, length, dst: open(dst, "wb").write(b"x" * max(1, int(length)))
+    def handler(data):
+        if len(data) > THRESH:
+            raise BadRequestError("Error code: 400 input_too_large")
+        return f"<{len(data)}>"
+    try:
+        c = FakeClient(handler)
+        text = X._transcribe_segment("src", 0.0, 100.0, "gpt-4o-mini-transcribe", c)
+        # larger calls were the failed attempts that triggered splitting; the
+        # leaves that actually produced text are within the limit
+        assert text and ("<25>" in text or "<26>" in text), text
+        assert any(n <= THRESH for n in c.transcriptions.calls), c.transcriptions.calls
+    finally:
+        X._extract_chunk = orig_ex
+
+
+def test_adaptive_split_floor_raises() -> None:
+    orig_ex = X._extract_chunk
+    X._extract_chunk = lambda src, start, length, dst: open(dst, "wb").write(b"x" * max(1, int(length)))
+    def handler(data):  # everything is "too large" -> must hit the split floor
+        raise BadRequestError("input_too_large")
+    try:
+        try:
+            X._transcribe_segment("src", 0.0, 100.0, "gpt-4o-mini-transcribe", FakeClient(handler))
+        except RuntimeError as exc:
+            assert "too large" in str(exc); return
+        raise AssertionError("expected RuntimeError at the split floor")
+    finally:
+        X._extract_chunk = orig_ex
+
+
+def test_stitch_removes_overlap_duplication() -> None:
+    # the chunk overlap repeats words at the seam; _stitch must drop the repeat
+    left = "the well has been dry since"
+    right = "since early March and the pump"
+    assert X._stitch(left, right) == "the well has been dry since early March and the pump"
+    # punctuation/case differences in the overlap are still matched
+    assert X._stitch("we visited the Village.", "village. it was empty") == \
+        "we visited the Village. it was empty"
+    # no overlap -> plain join, nothing dropped
+    assert X._stitch("alpha beta", "gamma delta") == "alpha beta gamma delta"
+    # empty pieces
+    assert X._stitch("", "only right") == "only right"
+    assert X._stitch("only left", "") == "only left"
+
+
+def test_missing_file_status_has_no_path() -> None:
     with tempfile.TemporaryDirectory() as d:
-        a = Path(d) / "a.wav"
-        out = Path(d) / "out.csv"
-        _make_wav(a, seconds=1.0)
-        stats = transcription.transcribe_files(
-            [str(a)], "en-US", str(out), client=WeirdAdapter(), confirm=True
-        )
-        assert stats["transcribed"] == 1 and stats["failed"] == 0, stats
-        row = _read_csv(out)[0]
-        assert row["status"] == "ok"
-        assert float(row["confidence"]) == 0.0
+        out = Path(d) / "o.csv"
+        secret = str(Path(d) / "respondent_jane_doe_2024.mp3")  # path itself is sensitive
+        s = X.transcribe_files([secret], str(out), confirm=True, client=FakeClient())
+        assert s["failed"] == 1, s
+        row = _read(out)[0]
+        assert row["status"] == "error: audio file not found", row
+        assert "jane_doe" not in row["status"], "leaked the file path into status"
+        assert row["file"] == secret  # path still available in its own column
 
 
-def test_api_error_is_sanitized_in_status() -> None:
-    """An adapter exception must not leak its message into the output CSV."""
-
-    class LeakyAdapter:
-        def transcribe(self, content, language_code, encoding, sample_rate, model):
-            raise RuntimeError("SECRET-RESPONSE-CONTENT-should-not-appear")
-
-    with tempfile.TemporaryDirectory() as d:
-        a = Path(d) / "a.wav"
-        out = Path(d) / "out.csv"
-        _make_wav(a, seconds=1.0)
-        stats = transcription.transcribe_files(
-            [str(a)], "en-US", str(out), client=LeakyAdapter(), confirm=True
-        )
-        assert stats["failed"] == 1, stats
-        status = _read_csv(out)[0]["status"]
-        assert "SECRET-RESPONSE-CONTENT" not in status, status
-        assert "transcription API call failed" in status
-        assert "RuntimeError" in status
+def test_unknown_exception_status_is_type_name_only() -> None:
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 10.0
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            leaky = FakeClient(lambda data: (_ for _ in ()).throw(
+                RuntimeError("MODEL_ECHOED_THE_AUDIO_TRANSCRIPT_xyz")))
+            s = X.transcribe_files([str(a)], str(out), confirm=True, client=leaky)
+            assert s["failed"] == 1, s
+            status = _read(out)[0]["status"]
+            assert "MODEL_ECHOED" not in status, status
+            assert status.startswith("error: transcription failed ("), status
+    finally:
+        X._audio_duration_seconds = orig
 
 
-def test_ffprobe_duration_path_for_non_wav() -> None:
-    """Exercise the ffprobe branch of _audio_duration_seconds on a non-WAV file.
+def test_too_large_detection_is_not_pinned_to_one_class() -> None:
+    class APIStatusError(Exception):
+        pass
+    assert X._is_too_large_error(APIStatusError("maximum context length exceeded"))
+    assert X._is_too_large_error(BadRequestError("input_too_large"))
+    # real token-limit message from the API contains "too large"
+    assert X._is_too_large_error(BadRequestError(
+        "Total number of tokens in instructions + audio is too large"))
+    assert not X._is_too_large_error(Exception("rate limit reached"))
+    # a bare "413" inside an unrelated message must NOT be treated as too-large
+    assert not X._is_too_large_error(Exception("request id req-1413abc rate limited"))
+    # a structured 413 status IS too-large
+    class Sized(Exception):
+        status_code = 413
+    assert X._is_too_large_error(Sized("payload"))
+    class Coded(Exception):
+        code = "context_length_exceeded"
+    assert X._is_too_large_error(Coded("nope"))
 
-    Required in CI (the workflow installs ffmpeg) so the non-WAV duration/cost
-    path is verified before any release. Skipped on developer machines that do
-    not have ffmpeg/ffprobe so they still pass locally.
-    """
-    import os
-    import shutil
-    import subprocess
 
-    if not (shutil.which("ffprobe") and shutil.which("ffmpeg")):
-        if os.environ.get("CI"):
-            raise AssertionError(
-                "ffmpeg/ffprobe must be installed in CI so the non-WAV audio "
-                "duration and cost-estimate path is exercised before release. "
-                "The CI workflow installs it; this failure means that step is "
-                "missing or broke."
-            )
-        print(
-            "  SKIP test_ffprobe_duration_path_for_non_wav "
-            "(ffmpeg/ffprobe not installed locally)"
-        )
-        return
+def test_stitch_window_is_bounded() -> None:
+    # a run longer than the overlap window is not fully collapsed (guards against
+    # eating a long coincidental similarity between two distinct passages)
+    left = "w " * 10
+    right = ("w " * 10) + "end"
+    out = X._stitch(left, right, max_overlap_words=8)
+    assert out.split().count("w") == 12, out  # 10 + (10-8) kept, not collapsed to 10
 
-    with tempfile.TemporaryDirectory() as d:
-        wav = Path(d) / "src.wav"
-        mp3 = Path(d) / "clip.mp3"
-        _make_wav(wav, seconds=3.0, rate=16000)
-        # Transcode to MP3 so the duration cannot come from the stdlib wave
-        # module and must be read via ffprobe.
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", str(wav), str(mp3)],
-            capture_output=True,
-            check=True,
-        )
-        dur = transcription._audio_duration_seconds(str(mp3))
-        assert dur is not None, "ffprobe should have measured the mp3 duration"
-        assert abs(dur - 3.0) < 0.5, f"unexpected duration {dur}"
-        est = transcription.estimate_cost([str(mp3)])
-        assert est["unknown_duration"] == [], est
-        assert est["known_seconds"] > 0, est
+
+def test_missing_ffmpeg_raises_actionable_error() -> None:
+    orig = X.shutil.which
+    X.shutil.which = lambda name: None
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            try:
+                X._extract_chunk("src.mp3", 0.0, 10.0, str(Path(d) / "o.mp3"))
+            except X.TranscriptionError as exc:
+                assert "ffmpeg" in str(exc).lower(), exc
+                return
+            raise AssertionError("expected TranscriptionError when ffmpeg is absent")
+    finally:
+        X.shutil.which = orig
+
+
+def test_windowed_multipart_path_stitches() -> None:
+    # force chunking (dur > gpt-4o cap) and verify the top-level windowed loop runs
+    orig_d = X._audio_duration_seconds; orig_g = X.os.path.getsize; orig_ex = X._extract_chunk
+    X._audio_duration_seconds = lambda p: 1800.0          # 30 min > 600s cap -> chunks
+    X.os.path.getsize = lambda p: 5_000_000               # whole-file > nothing special
+    X._extract_chunk = lambda src, start, length, dst: open(dst, "wb").write(b"x" * 100)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            counter = {"n": 0}
+            def handler(data):
+                counter["n"] += 1
+                return f"part{counter['n']}"
+            s = X.transcribe_files([str(a)], str(out), confirm=True, client=FakeClient(handler))
+            assert s["transcribed"] == 1 and s["failed"] == 0, s
+            text = _read(out)[0]["transcript"]
+            assert counter["n"] >= 3, "expected multiple windowed chunks"
+            assert "part1" in text and f"part{counter['n']}" in text, text
+    finally:
+        X._audio_duration_seconds = orig_d; X.os.path.getsize = orig_g; X._extract_chunk = orig_ex
+
+
+def test_actual_spend_billed_on_audio_minutes() -> None:
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 120.0  # 2 min
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            # fast model: $0.003/audio-min * 2 min = $0.006 -> sub-cent display
+            s = X.transcribe_files([str(a)], str(out), confirm=True, client=FakeClient())
+            assert abs(s["actual_usd"] - 0.006) < 1e-6, s
+            assert s["actual_usd_display"] == "< $0.01"
+            assert abs(s["total_spend_usd"] - 0.006) < 1e-6, s
+            # local provider must record nothing (free) but still report the total
+            orig_local = X._transcribe_local_file
+            X._transcribe_local_file = lambda path, lm: "on-device text"
+            try:
+                b = Path(d) / "b.mp3"; b.write_bytes(b"y"); out2 = Path(d) / "o2.csv"
+                s2 = X.transcribe_files([str(b)], str(out2), provider="local", confirm=True,
+                                        client=FakeClient())
+                assert s2["transcribed"] == 1 and s2["actual_usd"] == 0.0, s2
+                assert abs(s2["total_spend_usd"] - 0.006) < 1e-6, s2  # unchanged by local run
+            finally:
+                X._transcribe_local_file = orig_local
+    finally:
+        X._audio_duration_seconds = orig
+
+
+def test_cache_file_is_chmod_600() -> None:
+    import stat
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 30.0
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            cache = Path(d) / "c.db"
+            X.transcribe_files([str(a)], str(out), cache_path=str(cache),
+                               confirm=True, client=FakeClient())
+            mode = stat.S_IMODE(cache.stat().st_mode)
+            assert mode == 0o600, oct(mode)
+    finally:
+        X._audio_duration_seconds = orig
 
 
 def main() -> int:

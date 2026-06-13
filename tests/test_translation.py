@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Offline tests for user-data translation.
+"""Offline tests for OpenAI user-data translation.
 
-A fake translation client stands in for google-cloud-translate, so these tests
-run with no Google packages and no network. They cover the skip-list, cost
-math, language detection aggregation, the cost-confirmation gate, caching,
-de-duplication, output-column naming, the no-overwrite guard, glossary
-application, and retry/backoff.
+A fake OpenAI chat client stands in for the SDK, so these run with no network and
+no openai package. Cover: skip-list, cost math, dedup, cache, glossary,
+length-validated structured output (no silent truncation), sanitized errors,
+the confirm gate, no-overwrite, ragged/duplicate headers, and special-char
+round-trip.
 
 Run: python3 tests/test_translation.py
 """
@@ -13,503 +13,359 @@ Run: python3 tests/test_translation.py
 from __future__ import annotations
 
 import csv
+import json
 import sys
 import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "assets" / "google-cloud"))
+sys.path.insert(0, str(REPO_ROOT / "assets" / "transcribe-translate"))
 
-import translation  # noqa: E402
+import translation as T  # noqa: E402
+import usage_ledger as _UL  # noqa: E402  (same module object T imported)
 
-
-class FakeTranslateClient:
-    """Mimics google.cloud.translate_v2.Client for the methods we use."""
-
-    def __init__(self, detected="es"):
-        self.translate_calls = []
-        self.detect_calls = []
-        self._detected = detected
-
-    def translate(self, values, target_language=None, source_language=None, format_=None):
-        self.translate_calls.append(list(values))
-        return [
-            {
-                "translatedText": f"[{target_language}]{v}",
-                "detectedSourceLanguage": self._detected,
-                "input": v,
-            }
-            for v in values
-        ]
-
-    def detect_language(self, values):
-        self.detect_calls.append(list(values))
-        return [
-            {"language": self._detected, "confidence": 0.98, "input": v}
-            for v in values
-        ]
+# Redirect the spend ledger to a throwaway path so tests never touch the real
+# ~/.surveycto-skill ledger and stay hermetic.
+_UL.LEDGER_DIR = Path(tempfile.mkdtemp())
+_UL.LEDGER_PATH = _UL.LEDGER_DIR / "spend-ledger.json"
 
 
-def _write_csv(path: Path, fieldnames, rows) -> None:
+class _Msg:
+    def __init__(self, content): self.content = content
+class _Choice:
+    def __init__(self, content): self.message = _Msg(content)
+class _Resp:
+    def __init__(self, content): self.choices = [_Choice(content)]
+class _Completions:
+    def __init__(self, transform): self._t = transform; self.calls = []
+    def create(self, model, temperature, response_format, messages):
+        inputs = json.loads(messages[1]["content"])["inputs"]
+        self.calls.append(list(inputs))
+        return _Resp(json.dumps({"translations": self._t(inputs)}))
+class _Chat:
+    def __init__(self, comp): self.completions = comp
+class FakeClient:
+    """Mimics openai.OpenAI for chat.completions.create."""
+    def __init__(self, transform=None):
+        transform = transform or (lambda xs: [f"EN[{x}]" for x in xs])
+        self.completions = _Completions(transform)
+        self.chat = _Chat(self.completions)
+
+
+def _write(path, fieldnames, rows):
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for r in rows:
-            writer.writerow(r)
-
-
-def _read_csv(path: Path):
+        w = csv.DictWriter(f, fieldnames=fieldnames); w.writeheader()
+        for r in rows: w.writerow(r)
+def _read(path):
     with open(path, newline="", encoding="utf-8") as f:
         return list(csv.DictReader(f))
 
 
 def test_should_skip() -> None:
-    skip = ["", "  ", "999", "-99", "N/A", "n/a", ".", "5", "3.14", "-2.5", "x"]
-    for v in skip:
-        assert translation._should_skip(v), f"expected skip: {v!r}"
-    keep = ["hello world", "está bien", "12 goats in the field", "no"]
-    for v in keep:
-        assert not translation._should_skip(v), f"expected keep: {v!r}"
+    for v in ["", "  ", "999", "-99", "N/A", ".", "5", "3.14", "x"]:
+        assert T._should_skip(v), v
+    for v in ["hola mundo", "está bien", "nan", "inf", "no se"]:
+        assert not T._should_skip(v), v
 
 
 def test_estimate_cost() -> None:
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        _write_csv(
-            p,
-            ["id", "notes"],
-            [
-                {"id": "1", "notes": "hola mundo"},  # 10 chars
-                {"id": "2", "notes": "999"},  # skipped
-                {"id": "3", "notes": ""},  # skipped
-                {"id": "4", "notes": "adios"},  # 5 chars
-            ],
-        )
-        est = translation.estimate_cost(str(p), ["notes"], "en")
+        p = Path(d) / "x.csv"
+        _write(p, ["id", "note"], [{"id": "1", "note": "hola mundo"},
+                                   {"id": "2", "note": "999"},
+                                   {"id": "3", "note": "buenos dias"}])
+        est = T.estimate_cost(str(p), ["note"], "en")
         assert est["cells_to_translate"] == 2, est
-        assert est["billable_chars"] == 15, est
-        assert est["estimated_usd"] == round(15 / 1_000_000 * 20, 4), est
-        assert est["within_free_tier"] is True
+        assert est["cells_skipped"] == 1, est  # the "999" code
+        assert est["billable_chars"] == len("hola mundo") + len("buenos dias")
+        assert est["model"] == "gpt-4.1-nano"
         assert "PRIVACY" in est["pii_warning"]
+        # sub-cent estimates must read as "< $0.01", never a misleading "$0.00"
+        assert est["estimated_usd"] < 0.01 and est["estimated_usd_display"] == "< $0.01", est
+    assert T._usd_display(0.0) == "$0.00"
+    assert T._usd_display(0.004) == "< $0.01"
+    assert T._usd_display(0.024) == "$0.02"
+    assert T._usd_display(1.5) == "$1.50"
 
 
-def test_estimate_cost_missing_column() -> None:
+def test_translate_basic_skip_columns() -> None:
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        _write_csv(p, ["id"], [{"id": "1"}])
-        try:
-            translation.estimate_cost(str(p), ["nope"], "en")
-        except ValueError:
-            return
-        raise AssertionError("expected ValueError for missing column")
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        _write(p, ["id", "note"], [{"id": "1", "note": "hola"},
+                                   {"id": "2", "note": "999"},
+                                   {"id": "3", "note": "adios"}])
+        c = FakeClient()
+        s = T.translate_csv(str(p), ["note"], "en", "es", str(out), client=c, confirm=True)
+        assert s["cells_translated"] == 2 and s["cells_skipped"] == 1, s
+        r = _read(out)
+        assert r[0]["note_en"] == "EN[hola]" and r[1]["note_en"] == "" and r[2]["note_en"] == "EN[adios]"
+        assert r[0]["note"] == "hola"  # original preserved
 
 
-def test_detect_languages() -> None:
+def test_dedup_one_unique_sent() -> None:
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        _write_csv(
-            p,
-            ["notes"],
-            [{"notes": "hola"}, {"notes": "999"}, {"notes": "buenos dias"}],
-        )
-        client = FakeTranslateClient(detected="es")
-        res = translation.detect_languages(str(p), "notes", client=client)
-        assert res["sampled"] == 2  # "999" skipped
-        assert res["dominant"] == "es"
-        assert res["confidence"] == 1.0
-        assert res["counts"] == {"es": 2}
-
-
-def test_translate_requires_confirm() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        out = Path(d) / "out.csv"
-        _write_csv(p, ["notes"], [{"notes": "hola"}])
-        try:
-            translation.translate_csv(
-                str(p), ["notes"], "en", "es", str(out),
-                client=FakeTranslateClient(),
-            )
-        except PermissionError:
-            assert not out.exists()
-            return
-        raise AssertionError("expected PermissionError without confirm=True")
-
-
-def test_translate_basic_and_skip_and_columns() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        out = Path(d) / "out.csv"
-        _write_csv(
-            p,
-            ["id", "notes"],
-            [
-                {"id": "1", "notes": "hola"},
-                {"id": "2", "notes": "999"},
-                {"id": "3", "notes": "adios"},
-            ],
-        )
-        client = FakeTranslateClient()
-        stats = translation.translate_csv(
-            str(p), ["notes"], "en", "es", str(out),
-            client=client, confirm=True,
-        )
-        assert stats["cells_translated"] == 2, stats
-        assert stats["cells_skipped"] == 1, stats
-        assert stats["chars_sent"] == len("hola") + len("adios"), stats
-        rows = _read_csv(out)
-        assert rows[0]["notes_en"] == "[en]hola"
-        assert rows[1]["notes_en"] == ""  # skipped cell stays empty
-        assert rows[2]["notes_en"] == "[en]adios"
-        # original preserved
-        assert rows[0]["notes"] == "hola"
-
-
-def test_translate_dedupes_identical_text() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        out = Path(d) / "out.csv"
-        _write_csv(
-            p,
-            ["notes"],
-            [{"notes": "hola"}, {"notes": "hola"}, {"notes": "hola"}],
-        )
-        client = FakeTranslateClient()
-        stats = translation.translate_csv(
-            str(p), ["notes"], "en", "es", str(out),
-            client=client, confirm=True,
-        )
-        # 3 cells filled, but only 1 unique string sent and 1 API batch
-        assert stats["cells_translated"] == 3, stats
-        sent = [t for batch in client.translate_calls for t in batch]
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        _write(p, ["note"], [{"note": "hola"}, {"note": "hola"}, {"note": "hola"}])
+        c = FakeClient()
+        s = T.translate_csv(str(p), ["note"], "en", "es", str(out), client=c, confirm=True)
+        assert s["cells_translated"] == 3
+        sent = [t for batch in c.completions.calls for t in batch]
         assert sent == ["hola"], sent
 
 
-def test_translate_no_overwrite_existing_column() -> None:
+def test_cache_free_rerun() -> None:
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        out = Path(d) / "out.csv"
-        _write_csv(p, ["notes", "notes_en"], [{"notes": "hola", "notes_en": "x"}])
+        p = Path(d) / "x.csv"; o1 = Path(d) / "o1.csv"; o2 = Path(d) / "o2.csv"
+        cache = Path(d) / "c.db"
+        _write(p, ["note"], [{"note": "hola"}, {"note": "adios"}])
+        T.translate_csv(str(p), ["note"], "en", "es", str(o1), client=FakeClient(),
+                        cache_path=str(cache), confirm=True)
+        c2 = FakeClient()
+        s2 = T.translate_csv(str(p), ["note"], "en", "es", str(o2), client=c2,
+                             cache_path=str(cache), confirm=True)
+        assert s2["cells_cached"] == 2 and s2["cells_translated"] == 0, s2
+        assert c2.completions.calls == []
+        assert _read(o1) == _read(o2)
+
+
+def test_glossary_overlay_independent_of_cache() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "x.csv"; o1 = Path(d) / "o1.csv"; o2 = Path(d) / "o2.csv"
+        cache = Path(d) / "c.db"; gl = Path(d) / "g.csv"
+        _write(p, ["note"], [{"note": "household"}])
+        _write(gl, ["source", "target"], [{"source": "EN[household]", "target": "HH"}])
+        # run 1 with glossary, populates cache with RAW translation
+        T.translate_csv(str(p), ["note"], "en", "es", str(o1), client=FakeClient(),
+                        cache_path=str(cache), glossary_path=str(gl), confirm=True)
+        assert "HH" in _read(o1)[0]["note_en"]
+        # run 2 no glossary, served from cache -> raw shows through
+        c2 = FakeClient()
+        s2 = T.translate_csv(str(p), ["note"], "en", "es", str(o2), client=c2,
+                             cache_path=str(cache), confirm=True)
+        assert s2["cells_cached"] == 1 and c2.completions.calls == []
+        assert _read(o2)[0]["note_en"] == "EN[household]"
+
+
+def test_length_mismatch_fails_loud_and_sanitized() -> None:
+    # model returns the WRONG number of translations -> must error, never silently
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        secret = "RESPONDENT_PII_jane_at_42"
+        _write(p, ["note"], [{"note": secret}, {"note": "otra cosa"}])
+        bad = FakeClient(transform=lambda xs: ["only one"])  # returns 1 for 2
         try:
-            translation.translate_csv(
-                str(p), ["notes"], "en", "es", str(out),
-                client=FakeTranslateClient(), confirm=True,
-            )
-        except ValueError as exc:
-            assert "already exists" in str(exc)
+            T.translate_csv(str(p), ["note"], "en", "es", str(out), client=bad,
+                            confirm=True, max_retries=0)
+        except RuntimeError as exc:
+            assert "translation API call failed" in str(exc)
+            assert secret not in str(exc), "source text leaked in error"
             return
+        raise AssertionError("expected RuntimeError on length mismatch")
+
+
+def test_transient_error_retries_then_succeeds() -> None:
+    real_sleep = T.time.sleep; T.time.sleep = lambda s: None
+    try:
+        class Flaky(FakeClient):
+            def __init__(self):
+                super().__init__(); self.n = 0
+                outer = self
+                class C:
+                    def create(self2, **kw):
+                        outer.n += 1
+                        if outer.n < 2:
+                            raise RuntimeError("503 service unavailable")
+                        inputs = json.loads(kw["messages"][1]["content"])["inputs"]
+                        return _Resp(json.dumps({"translations": [f"EN[{x}]" for x in inputs]}))
+                self.chat = _Chat(C())
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+            _write(p, ["note"], [{"note": "hola"}])
+            c = Flaky()
+            s = T.translate_csv(str(p), ["note"], "en", "es", str(out), client=c, confirm=True)
+            assert s["cells_translated"] == 1 and c.n == 2
+    finally:
+        T.time.sleep = real_sleep
+
+
+def test_confirm_gate() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        _write(p, ["note"], [{"note": "hola"}])
+        try:
+            T.translate_csv(str(p), ["note"], "en", "es", str(out), client=FakeClient())
+        except PermissionError:
+            assert not out.exists()
+            return
+        raise AssertionError("expected PermissionError without confirm")
+
+
+def test_no_overwrite() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        _write(p, ["note", "note_en"], [{"note": "hola", "note_en": "x"}])
+        try:
+            T.translate_csv(str(p), ["note"], "en", "es", str(out), client=FakeClient(), confirm=True)
+        except ValueError as exc:
+            assert "already exists" in str(exc); return
         raise AssertionError("expected ValueError for existing output column")
 
 
-def test_cache_avoids_second_api_call() -> None:
+def test_dup_header_rejected_and_ragged_ok() -> None:
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        out1 = Path(d) / "out1.csv"
-        out2 = Path(d) / "out2.csv"
-        cache = Path(d) / "cache.db"
-        _write_csv(p, ["notes"], [{"notes": "hola"}, {"notes": "adios"}])
-
-        c1 = FakeTranslateClient()
-        s1 = translation.translate_csv(
-            str(p), ["notes"], "en", "es", str(out1),
-            client=c1, cache_path=str(cache), confirm=True,
-        )
-        assert s1["cells_translated"] == 2 and s1["cells_cached"] == 0
-
-        c2 = FakeTranslateClient()
-        s2 = translation.translate_csv(
-            str(p), ["notes"], "en", "es", str(out2),
-            client=c2, cache_path=str(cache), confirm=True,
-        )
-        assert s2["cells_cached"] == 2, s2
-        assert s2["cells_translated"] == 0, s2
-        assert c2.translate_calls == [], "second run should make no API calls"
-        # output identical
-        assert _read_csv(out1) == _read_csv(out2)
-
-
-def test_apply_glossary_after() -> None:
-    glossary = {"household": "hogar", "head of household": "jefe del hogar"}
-    # longest match wins: "head of household" -> "jefe del hogar"
-    text = "The head of household and the household"
-    out = translation.apply_glossary(text, glossary)
-    assert "jefe del hogar" in out
-    assert "hogar and the hogar" in out
-
-
-def test_apply_glossary_empty_source_does_not_hang() -> None:
-    # An empty source key would match at every position; it must be skipped.
-    out = translation.apply_glossary("some text", {"": "X", "text": "TEXT"})
-    assert out == "some TEXT"
-
-
-def test_glossary_loaded_and_applied_in_translate() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        out = Path(d) / "out.csv"
-        gloss = Path(d) / "gloss.csv"
-        _write_csv(p, ["notes"], [{"notes": "household survey"}])
-        _write_csv(
-            gloss,
-            ["source", "target_en", "target_fr"],
-            [{"source": "household", "target_en": "HOUSEHOLD", "target_fr": "ménage"}],
-        )
-        client = FakeTranslateClient()
-        translation.translate_csv(
-            str(p), ["notes"], "en", "es", str(out),
-            client=client, glossary_path=str(gloss), confirm=True,
-        )
-        rows = _read_csv(out)
-        # fake returns "[en]household survey", glossary rewrites "household"
-        assert "HOUSEHOLD" in rows[0]["notes_en"], rows
-
-
-def test_backoff_retries_then_succeeds() -> None:
-    sleeps = []
-    real_sleep = translation.time.sleep
-    translation.time.sleep = lambda s: sleeps.append(s)
-
-    class FlakyClient(FakeTranslateClient):
-        def __init__(self):
-            super().__init__()
-            self.attempts = 0
-
-        def translate(self, values, **kwargs):
-            self.attempts += 1
-            if self.attempts < 3:
-                raise RuntimeError("429 rate limited")
-            return super().translate(values, **kwargs)
-
-    try:
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "data.csv"
-            out = Path(d) / "out.csv"
-            _write_csv(p, ["notes"], [{"notes": "hola"}])
-            client = FlakyClient()
-            stats = translation.translate_csv(
-                str(p), ["notes"], "en", "es", str(out),
-                client=client, confirm=True, max_retries=5,
-            )
-            assert stats["cells_translated"] == 1
-            assert client.attempts == 3
-            assert len(sleeps) == 2  # two retries before the third success
-    finally:
-        translation.time.sleep = real_sleep
-
-
-def test_backoff_gives_up_and_raises() -> None:
-    real_sleep = translation.time.sleep
-    translation.time.sleep = lambda s: None
-
-    class AlwaysFails(FakeTranslateClient):
-        def translate(self, values, **kwargs):
-            raise RuntimeError(f"persistent failure with {list(values)}")
-
-    try:
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "data.csv"
-            out = Path(d) / "out.csv"
-            _write_csv(p, ["notes"], [{"notes": "hola"}])
-            try:
-                translation.translate_csv(
-                    str(p), ["notes"], "en", "es", str(out),
-                    client=AlwaysFails(), confirm=True, max_retries=2,
-                )
-            except RuntimeError as exc:
-                # sanitized after retries exhausted: no original message/content
-                assert "persistent failure" not in str(exc)
-                assert "translation API call failed" in str(exc)
-                return
-            raise AssertionError("expected RuntimeError after retries exhausted")
-    finally:
-        translation.time.sleep = real_sleep
-
-
-def test_should_skip_keeps_word_like_numbers() -> None:
-    # "nan"/"inf" are real words in some languages and must not be skipped just
-    # because float() would parse them; scientific/underscored forms are not
-    # survey codes either.
-    for v in ["nan", "inf", "-inf", "Infinity", "1e5", "1_000"]:
-        assert not translation._should_skip(v), f"should not skip {v!r}"
-    for v in ["999", "-99", "3.14", "-2.5", ".5", "42"]:
-        assert translation._should_skip(v), f"should skip {v!r}"
-
-
-def test_duplicate_header_rejected() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        # write a raw CSV with a duplicated header
-        p.write_text("notes,notes,id\nhello,world,1\n", encoding="utf-8")
+        p = Path(d) / "dup.csv"
+        p.write_text("note,note,id\na,b,1\n", encoding="utf-8")
         try:
-            translation.estimate_cost(str(p), ["notes"], "en")
+            T.estimate_cost(str(p), ["note"], "en")
         except ValueError as exc:
             assert "duplicate column names" in str(exc)
-            return
-        raise AssertionError("expected ValueError for duplicate header")
+        else:
+            raise AssertionError("expected duplicate-header error")
+        p2 = Path(d) / "rag.csv"; out = Path(d) / "o.csv"
+        p2.write_text("id,note\n1,hola\n2,adios,EXTRA\n", encoding="utf-8")
+        s = T.translate_csv(str(p2), ["note"], "en", "es", str(out), client=FakeClient(), confirm=True)
+        assert s["cells_translated"] == 2
 
 
-def test_ragged_row_does_not_crash() -> None:
+def test_special_chars_roundtrip() -> None:
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        out = Path(d) / "out.csv"
-        # second row has an extra field beyond the 2-column header
-        p.write_text("id,notes\n1,hola\n2,adios,EXTRA\n", encoding="utf-8")
-        stats = translation.translate_csv(
-            str(p), ["notes"], "en", "es", str(out),
-            client=FakeTranslateClient(), confirm=True,
-        )
-        assert stats["cells_translated"] == 2, stats
-        rows = _read_csv(out)
-        assert rows[0]["notes_en"] == "[en]hola"
-        assert rows[1]["notes_en"] == "[en]adios"
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        tricky = 'dijo: "hola, qué tal", y se fue'
+        _write(p, ["note"], [{"note": tricky}])
+        # echo the input back as the "translation" to verify exact round-trip
+        c = FakeClient(transform=lambda xs: list(xs))
+        T.translate_csv(str(p), ["note"], "en", "es", str(out), client=c, confirm=True)
+        r = _read(out)
+        assert r[0]["note"] == tricky and r[0]["note_en"] == tricky
 
 
-def test_duplicate_columns_arg_deduped() -> None:
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        out = Path(d) / "out.csv"
-        _write_csv(p, ["notes"], [{"notes": "hola"}])
-        stats = translation.translate_csv(
-            str(p), ["notes", "notes"], "en", "es", str(out),
-            client=FakeTranslateClient(), confirm=True,
-        )
-        # counted once, single output column
-        assert stats["cells_translated"] == 1, stats
-        with open(out, encoding="utf-8") as f:
-            header = f.readline().strip()
-        assert header.count("notes_en") == 1, header
-
-
-def test_cache_is_glossary_independent() -> None:
-    """Cache stores the raw translation; changing the glossary changes output
-    without forcing a re-translation."""
-    with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        out1 = Path(d) / "out1.csv"
-        out2 = Path(d) / "out2.csv"
-        cache = Path(d) / "translation-cache.db"
-        gloss = Path(d) / "gloss.csv"
-        _write_csv(p, ["notes"], [{"notes": "household"}])
-        _write_csv(gloss, ["source", "target"], [{"source": "household", "target": "HH"}])
-
-        # run 1: glossary present, populates cache with RAW "[en]household"
-        c1 = FakeTranslateClient()
-        translation.translate_csv(
-            str(p), ["notes"], "en", "es", str(out1),
-            client=c1, cache_path=str(cache), glossary_path=str(gloss), confirm=True,
-        )
-        assert "HH" in _read_csv(out1)[0]["notes_en"]
-
-        # run 2: same cache, NO glossary. Served from cache (no API call), and
-        # the raw translation comes through without the glossary substitution.
-        c2 = FakeTranslateClient()
-        s2 = translation.translate_csv(
-            str(p), ["notes"], "en", "es", str(out2),
-            client=c2, cache_path=str(cache), confirm=True,
-        )
-        assert s2["cells_cached"] == 1 and s2["cells_translated"] == 0, s2
-        assert c2.translate_calls == []
-        assert _read_csv(out2)[0]["notes_en"] == "[en]household"
+def test_length_mismatch_retries_then_succeeds() -> None:
+    # a wrong-count response is a transient slip: retry, then succeed (no truncation)
+    real_sleep = T.time.sleep; T.time.sleep = lambda s: None
+    try:
+        class Flaky(FakeClient):
+            def __init__(self):
+                super().__init__(); self.n = 0
+                outer = self
+                class C:
+                    def create(self2, **kw):
+                        outer.n += 1
+                        inputs = json.loads(kw["messages"][1]["content"])["inputs"]
+                        if outer.n < 2:
+                            return _Resp(json.dumps({"translations": ["only one"]}))  # wrong count
+                        return _Resp(json.dumps({"translations": [f"EN[{x}]" for x in inputs]}))
+                self.chat = _Chat(C())
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+            _write(p, ["note"], [{"note": "hola"}, {"note": "adios"}])
+            c = Flaky()
+            s = T.translate_csv(str(p), ["note"], "en", "es", str(out), client=c, confirm=True)
+            assert s["cells_translated"] == 2 and c.n == 2, (s, c.n)
+            assert _read(out)[0]["note_en"] == "EN[hola]"
+    finally:
+        T.time.sleep = real_sleep
 
 
 def test_non_retryable_error_fails_fast() -> None:
-    sleeps = []
-    real_sleep = translation.time.sleep
-    translation.time.sleep = lambda s: sleeps.append(s)
-
-    class BadArg(FakeTranslateClient):
-        def __init__(self):
-            super().__init__()
-            self.attempts = 0
-
-        def translate(self, values, **kwargs):
-            self.attempts += 1
-            raise ValueError("invalid argument")  # programming/permanent error
-
+    # an auth error must NOT be retried (don't hammer a bad key); one call, then fail
+    real_sleep = T.time.sleep; T.time.sleep = lambda s: None
     try:
+        class AuthBoom(FakeClient):
+            def __init__(self):
+                super().__init__(); self.n = 0
+                outer = self
+                class AuthenticationError(Exception):
+                    pass
+                class C:
+                    def create(self2, **kw):
+                        outer.n += 1
+                        raise AuthenticationError("invalid api key")
+                self.chat = _Chat(C())
         with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "data.csv"
-            out = Path(d) / "out.csv"
-            _write_csv(p, ["notes"], [{"notes": "hola"}])
-            client = BadArg()
+            p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+            _write(p, ["note"], [{"note": "hola"}])
+            c = AuthBoom()
             try:
-                translation.translate_csv(
-                    str(p), ["notes"], "en", "es", str(out),
-                    client=client, confirm=True, max_retries=5,
-                )
+                T.translate_csv(str(p), ["note"], "en", "es", str(out), client=c, confirm=True)
             except RuntimeError as exc:
-                assert client.attempts == 1, "must not retry a non-retryable error"
-                assert sleeps == [], "must not sleep before failing fast"
-                # error is sanitized: type name only, no original message
-                assert "ValueError" in str(exc)
-                assert "invalid argument" not in str(exc)
+                assert c.n == 1, f"retried a non-retryable error ({c.n} calls)"
+                assert "invalid api key" not in str(exc), "leaked error content"
                 return
-            raise AssertionError("expected sanitized RuntimeError to propagate")
+            raise AssertionError("expected RuntimeError on auth failure")
     finally:
-        translation.time.sleep = real_sleep
+        T.time.sleep = real_sleep
 
 
-def test_translate_api_error_does_not_leak_source_text() -> None:
-    """A translate() error that echoes the input must not reach the caller."""
-    class LeakyClient(FakeTranslateClient):
-        def translate(self, values, **kwargs):
-            raise ValueError(
-                ("Expected iterations to have same length", list(values), [])
-            )
-
+def test_actual_spend_recorded_and_accumulates() -> None:
+    # a usage-bearing response -> actual cost billed on real tokens, accumulated
+    class _Usage:
+        prompt_tokens = 2_000_000
+        completion_tokens = 1_000_000
+    class _RespU(_Resp):
+        def __init__(self, content): super().__init__(content); self.usage = _Usage()
+    class _CompU(_Completions):
+        def create(self, model, temperature, response_format, messages):
+            inputs = json.loads(messages[1]["content"])["inputs"]
+            self.calls.append(list(inputs))
+            return _RespU(json.dumps({"translations": [f"EN[{x}]" for x in inputs]}))
+    class UsageClient(FakeClient):
+        def __init__(self):
+            super().__init__(); self.completions = _CompU(lambda xs: xs)
+            self.chat = _Chat(self.completions)
+    _UL.LEDGER_PATH.unlink(missing_ok=True)  # start from a clean ledger
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        out = Path(d) / "out.csv"
-        secret = "RESPONDENT_PII_jane_at_42_elm_street"
-        _write_csv(p, ["notes"], [{"notes": secret}])
-        try:
-            translation.translate_csv(
-                str(p), ["notes"], "en", "es", str(out),
-                client=LeakyClient(), confirm=True, max_retries=0,
-            )
-        except RuntimeError as exc:
-            assert secret not in str(exc), f"source text leaked: {exc}"
-            assert "translation API call failed" in str(exc)
-            return
-        raise AssertionError("expected sanitized RuntimeError")
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        _write(p, ["note"], [{"note": "hola"}])
+        # gpt-4.1-nano: in $0.10/Mtok, out $0.40/Mtok -> 2*0.10 + 1*0.40 = $0.60
+        s1 = T.translate_csv(str(p), ["note"], "en", "es", str(out), client=UsageClient(), confirm=True)
+        assert abs(s1["actual_usd"] - 0.60) < 1e-6, s1
+        assert s1["actual_usd_display"] == "$0.60"
+        assert abs(s1["total_spend_usd"] - 0.60) < 1e-6, s1
+        out2 = Path(d) / "o2.csv"
+        _write(Path(d) / "y.csv", ["note"], [{"note": "adios"}])
+        s2 = T.translate_csv(str(Path(d) / "y.csv"), ["note"], "en", "es", str(out2),
+                             client=UsageClient(), confirm=True)
+        assert abs(s2["total_spend_usd"] - 1.20) < 1e-6, s2  # accumulated across runs
 
 
-def test_detect_languages_api_error_is_sanitized() -> None:
-    class LeakyClient(FakeTranslateClient):
-        def detect_language(self, values):
-            raise RuntimeError(f"bad input: {list(values)}")
-
+def test_fallback_spend_when_no_usage_reported() -> None:
+    # FakeClient returns no usage -> char-based fallback; assert the dollar math
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        secret = "SECRET_open_response_text"
-        _write_csv(p, ["notes"], [{"notes": secret}])
-        try:
-            translation.detect_languages(str(p), "notes", client=LeakyClient())
-        except RuntimeError as exc:
-            assert secret not in str(exc), f"sample text leaked: {exc}"
-            assert "language detection API call failed" in str(exc)
-            return
-        raise AssertionError("expected sanitized RuntimeError")
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        _write(p, ["note"], [{"note": "hola mundo"}])  # 10 chars, 1 cell
+        s = T.translate_csv(str(p), ["note"], "en", "es", str(out), client=FakeClient(), confirm=True)
+        # gpt-4.1-nano: in $0.10/Mtok, out $0.40/Mtok; tok_in=10/4+1*12=14.5, tok_out=2.5
+        expected = 14.5 / 1e6 * 0.10 + 2.5 / 1e6 * 0.40
+        assert abs(s["actual_usd"] - round(expected, 6)) < 1e-9, (s, expected)
+        assert s["actual_usd_display"] == "< $0.01"
 
 
-def test_detect_languages_surfaces_pii_warning() -> None:
+def test_all_cached_run_records_no_spend() -> None:
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory() as d:
-        p = Path(d) / "data.csv"
-        _write_csv(p, ["notes"], [{"notes": "hola mundo"}])
-        res = translation.detect_languages(str(p), "notes", client=FakeTranslateClient())
-        assert "PRIVACY" in res["pii_warning"]
+        p = Path(d) / "x.csv"; o1 = Path(d) / "o1.csv"; o2 = Path(d) / "o2.csv"
+        cache = Path(d) / "c.db"
+        _write(p, ["note"], [{"note": "hola"}])
+        s1 = T.translate_csv(str(p), ["note"], "en", "es", str(o1), client=FakeClient(),
+                             cache_path=str(cache), confirm=True)
+        total_after_first = s1["total_spend_usd"]
+        # second run is fully cached -> no API call -> this run costs nothing
+        s2 = T.translate_csv(str(p), ["note"], "en", "es", str(o2), client=FakeClient(),
+                             cache_path=str(cache), confirm=True)
+        assert s2["cells_cached"] == 1 and s2["actual_usd"] == 0.0, s2
+        assert s2["total_spend_usd"] == total_after_first, s2  # total unchanged
 
 
-def test_cache_connect_closes_on_unusable_path() -> None:
-    # A non-sqlite file as the cache must raise, not leak the connection.
+def test_cache_file_is_chmod_600() -> None:
+    import stat
     with tempfile.TemporaryDirectory() as d:
-        bogus = Path(d) / "not-a-db.db"
-        bogus.write_text("this is plainly not an sqlite database file" * 50)
-        try:
-            translation._cache_connect(str(bogus))
-        except Exception:
-            return  # raised as expected; close-on-error path exercised
-        raise AssertionError("expected an error opening a non-sqlite cache file")
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"; cache = Path(d) / "c.db"
+        _write(p, ["note"], [{"note": "hola"}])
+        T.translate_csv(str(p), ["note"], "en", "es", str(out), client=FakeClient(),
+                        cache_path=str(cache), confirm=True)
+        mode = stat.S_IMODE(cache.stat().st_mode)
+        assert mode == 0o600, oct(mode)
 
 
 def main() -> int:

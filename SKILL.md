@@ -2,24 +2,19 @@
 name: surveycto
 description: >
   Design, edit, debug, and convert SurveyCTO forms (XLSForm .xlsx with
-  survey/choices/settings sheets), server datasets (.xml with a dataset
-  root element), Data Explorer workbook definitions, and field plug-ins
-  (.fieldplugin.zip bundles attached via `custom-name` appearances).
-  Covers form logic, expressions, choice lists, repeat groups, skip
-  patterns, constraints, calculations, dataset publishing, and case
-  management. Also covers converting forms from KoboToolbox/ODK
-  XLSForms, CommCare XForms XML, Qualtrics .qsf JSON, and other sources
-  into SurveyCTO XLSForms. Also covers translating exported response
-  data (CSV columns of open-ended answers, enumerator notes) into
-  another language and transcribing audio captures (audio-audit
-  recordings, voice responses), both via cloud services with safe
-  credential handling. Use when the user mentions SurveyCTO, XLSForm,
-  ODK-based forms, survey forms, or data collection forms; when working
-  with relevant .xlsx, .xml, or .fieldplugin.zip files; when converting
-  a form from another platform; or when translating or transcribing
-  exported SurveyCTO response data or audio. New XLSForms always start
-  from the bundled template at assets/xlsform-template.xlsx, never built
-  from scratch.
+  survey/choices/settings sheets), server datasets (.xml), Data Explorer
+  workbook definitions, and field plug-ins (.fieldplugin.zip bundles using
+  `custom-name` appearances). Covers form logic, expressions, choice lists,
+  repeat groups, skip patterns, constraints, calculations, dataset publishing,
+  and case management; converting forms from KoboToolbox/ODK XLSForms, CommCare
+  XForms XML, and Qualtrics .qsf JSON; and translating or transcribing exported
+  response data (open-ended answers, enumerator notes, audio-audit recordings,
+  voice responses) via cloud services. Use when the user mentions SurveyCTO,
+  XLSForm, ODK-based forms, survey forms, or data collection forms; works with
+  .xlsx, .xml, or .fieldplugin.zip files; converts a form from another platform;
+  or translates/transcribes exported SurveyCTO data or audio. New XLSForms
+  always start from the bundled template at assets/xlsform-template.xlsx, never
+  built from scratch.
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
@@ -265,13 +260,9 @@ The template provides:
 
 Adding a language, updating translations after the source changes, or verifying existing translations is its own workflow. **Read [`references/translation.md`](references/translation.md) before starting** — don't improvise from the column-convention sketch in [`references/xlsform.md`](references/xlsform.md).
 
-#### Workflow: translate user data (responses, comments, transcriptions)
+#### Workflow: translate or transcribe exported data (OpenAI)
 
-Translating collected data (open-ended responses, enumerator notes, audio transcriptions) in a CSV export is a different workflow from form-label translation: the data is high-volume and sensitive, so it must never enter the conversation or logs. Instead, a shipped script sends it directly to Google Cloud Translation and writes the result to disk. The credential is a Google service-account file whose contents you must never read. **Read [`references/google-cloud-credentials.md`](references/google-cloud-credentials.md) and [`references/user-data-translation.md`](references/user-data-translation.md) before starting.** Always estimate cost and get explicit user confirmation before any paid API call.
-
-#### Workflow: transcribe audio (audio audits, voice responses)
-
-Transcribing SurveyCTO audio captures into text uses Google Cloud Speech-to-Text and the same credential handling as user-data translation. The audio is sensitive and must not pass through the conversation; a shipped script sends it to the API and writes a transcripts CSV. **Read [`references/google-cloud-credentials.md`](references/google-cloud-credentials.md) and [`references/audio-transcription.md`](references/audio-transcription.md) before starting.** Estimate cost and confirm before transcribing.
+Translating collected data (open-ended responses, enumerator notes, transcriptions) or transcribing audio captures (audio audits, voice responses) from an export is distinct from form-label translation: the data is high-volume and sensitive, so it must never enter the conversation or logs. A shipped script sends it to OpenAI (transcription can instead use an optional on-device Whisper model), chunking long audio automatically, and writes the result to a CSV. The credential is an OpenAI API key whose value you must never print or echo. **Read [`references/openai-credentials.md`](references/openai-credentials.md) first, then [`references/user-data-translation.md`](references/user-data-translation.md) (translation) or [`references/audio-transcription.md`](references/audio-transcription.md) (audio) before starting.** Always estimate cost and get explicit user confirmation before any paid API call.
 
 #### Workflow: convert a form from another platform
 
@@ -477,9 +468,9 @@ In the dataset XML, add a `<dataLink>` with:
 | [`references/overview.md`](references/overview.md) | First — orientation, file types, how they fit together |
 | [`references/xlsform.md`](references/xlsform.md) | **Mandatory before any XLSForm work** — column conventions, expressions, groups/repeats, multi-language |
 | [`references/translation.md`](references/translation.md) | Adding, updating, or verifying form-label translations — workflow, preserve-verbatim rules, glossary handling, self-review, back-translation spot check, verification checklist |
-| [`references/google-cloud-credentials.md`](references/google-cloud-credentials.md) | **Mandatory before user-data translation or audio transcription.** Google service-account handling, the "never read the credentials file" mandate, and user-coaching for Google Cloud setup |
-| [`references/user-data-translation.md`](references/user-data-translation.md) | Translating collected data (responses, comments, transcriptions) in a CSV via Google Cloud Translation. Cost gate, PII warning, caching, skip-list, glossary, output columns |
-| [`references/audio-transcription.md`](references/audio-transcription.md) | Transcribing audio captures (audio audits, voice responses) via Google Cloud Speech-to-Text. Cost gate, PII warning, caching, size/format notes |
+| [`references/openai-credentials.md`](references/openai-credentials.md) | **Mandatory before user-data translation or audio transcription.** OpenAI API-key handling, the "never reveal the key" mandate, and user-coaching for OpenAI setup |
+| [`references/user-data-translation.md`](references/user-data-translation.md) | Translating collected data (responses, comments, transcriptions) in a CSV via OpenAI. Model selection (cheapest default), cost gate, PII warning, caching, skip-list, glossary, output columns |
+| [`references/audio-transcription.md`](references/audio-transcription.md) | Transcribing audio captures (audio audits, voice responses) via OpenAI or on-device Whisper. Model selection, automatic chunking of long audio, cost gate, PII warning, caching |
 | [`references/form-conversion.md`](references/form-conversion.md) | **Mandatory before any form conversion** — platform-agnostic workflow for converting form definitions from other data collection platforms into SurveyCTO XLSForms, including the universal mapping concerns, the conversion-report contract, and pointers to platform-specific references |
 | [`references/form-conversion-qualtrics.md`](references/form-conversion-qualtrics.md) | Converting a Qualtrics `.qsf` JSON export — `.qsf` anatomy, question-type / selector mapping, display-logic translation, flow/branch handling, gotchas |
 | [`references/form-conversion-kobo.md`](references/form-conversion-kobo.md) | Converting a KoboToolbox XLSForm `.xlsx` — expression rewrites, Kobo-specific extensions (`kobo--matrix`, `kobo--score`, `kobo--rank`), settings differences |

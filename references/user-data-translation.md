@@ -1,184 +1,153 @@
 <!-- PRIMER: user-data-translation
-  STATUS: drafted 2026-06-06 -->
+  STATUS: drafted 2026-06-13 -->
 
 # Translating user data (responses, comments, transcriptions)
 
-This primer covers **translating columns of collected user data** in exported
-CSV files: open-ended responses, enumerator notes, supervisor comments, and
-audio transcriptions. It uses Google Cloud Translation as the backing service.
+This primer covers translating columns of collected user data in exported CSV
+files (open-ended responses, enumerator notes, supervisor comments, audio
+transcriptions) into a common working language, using OpenAI.
 
 This is a different workflow from form-label translation. Read
-[`translation.md`](translation.md) for form labels; read this for user data. The
-distinction matters:
+[`translation.md`](translation.md) for form labels; read this for user data:
 
 | | Form labels ([`translation.md`](translation.md)) | User data (this primer) |
 | --- | --- | --- |
 | Volume | Low (50-500 labels) | Can be very large |
 | Sensitivity | Non-sensitive | Often sensitive; may contain PII |
-| In conversation? | Yes, the agent translates directly | No, sent to an API by a script; the agent never ingests the cells |
-| Backing service | The agent's own ability | Google Cloud Translation |
-| Credentials | None | A Google service-account file ([`google-cloud-credentials.md`](google-cloud-credentials.md)) |
+| In conversation? | Yes, the agent translates directly | No, sent to an API by a script |
+| Backing service | The agent's own ability | OpenAI |
+| Credentials | None | An OpenAI API key ([`openai-credentials.md`](openai-credentials.md)) |
 
-Read [`google-cloud-credentials.md`](google-cloud-credentials.md) first: it
-covers how to authenticate without ever exposing the user's secret, and how to
-coach a user who has not set up credentials yet.
+Read [`openai-credentials.md`](openai-credentials.md) first: it covers how to
+authenticate without exposing the user's key, and how to coach a user who has
+not set one up.
 
 ## Why this runs as a script, not in conversation
 
 User data is too sensitive to pass through the agent's context or the
 conversation logs, and there can be far too much of it to fit anyway. So the
-agent does not read the cell contents and translate them itself. Instead it
-runs the shipped module
-[`assets/google-cloud/translation.py`](../assets/google-cloud/translation.py),
-which reads the CSV, sends the text directly to Google Cloud Translation, and
-writes the translated CSV to disk. The agent orchestrates and reports; it does
-not ingest the data cell by cell.
+agent runs the shipped module
+[`assets/transcribe-translate/translation.py`](../assets/transcribe-translate/translation.py),
+which reads the CSV, sends the text to OpenAI, and writes the translated CSV to
+disk. The agent orchestrates and reports; it does not read the cells.
+
+## Model selection (cheapest is the default)
+
+Translation uses an OpenAI chat model. The user can pick:
+
+- `cheap` -> `gpt-4.1-nano` (DEFAULT; lowest cost, strong multilingual quality)
+- `better` -> `gpt-4o-mini` (slightly higher cost; use for nuanced/high-stakes text)
+
+Pass `--model cheap|better` (or an explicit model id). Default to `cheap` and
+only suggest `better` if the user reports quality concerns on nuanced text.
 
 ## What the module gives you
 
-[`assets/google-cloud/translation.py`](../assets/google-cloud/translation.py)
-exposes composable pieces (not a single "translate CSV" button, because users'
-needs vary):
+- `estimate_cost(csv_path, columns, target_language, model=None)` counts billable
+  characters/cells and returns an approximate USD cost (token-based; de-dup makes
+  the real cost lower) plus the PII warning.
+- `translate_csv(csv_path, columns, target_language, source_language, output_path,
+  model=None, glossary_path=None, cache_path=None, confirm=False)` is the workhorse.
+- `apply_glossary(text, glossary)` enforces preferred terminology.
 
-- `estimate_cost(csv_path, columns, target_language)` counts billable
-  characters and returns the estimated USD cost and free-tier status.
-- `detect_languages(csv_path, column, sample_size=100)` samples cells and
-  reports detected source languages with a confidence figure. This is a metered
-  Google call that sends the sampled cells to Google, so it carries the same
-  privacy consideration as translation; it is bounded to `sample_size` cells, so
-  for the default it stays well inside the free tier. It returns the same
-  `pii_warning` for you to show the user.
-- `translate_csv(csv_path, columns, target_language, source_language,
-  output_path, glossary_path=None, cache_path=None, confirm=False)` is the
-  workhorse.
-- `apply_glossary(text, glossary)` post-processes a translation to enforce
-  preferred terminology.
-
-Built into `translate_csv`:
-
-- **Cost gate.** It refuses to run unless `confirm=True`. Always call
+Built in:
+- **Cost gate.** `translate_csv` refuses to run unless `confirm=True`. Always call
   `estimate_cost` and confirm with the user first.
-- **Caching.** With a `cache_path`, translations are memoized in SQLite keyed on
-  the source language, target language, and a hash of the source text.
-  Re-translating a re-downloaded dataset only pays for cells whose text changed.
-- **De-duplication within a run.** Identical source strings are sent once.
-- **Skip-list.** Empty cells, pure numbers, single letters, and common survey
-  codes (`N/A`, `999`, `-99`, and the like) are never sent to the API.
-- **Preserve originals.** It adds a `<column>_<target_language>` column next to
-  each source column and never overwrites the original. If that output column
-  already exists, it refuses to run rather than clobber data.
-- **Batching with backoff.** Requests are chunked, with exponential backoff on
-  transient API errors.
+- **Length-validated output.** Each batch is sent with a strict instruction to
+  return exactly one translation per input as a JSON array; the length is checked
+  and retried, so the model cannot silently drop or merge cells.
+- **Caching.** With a `cache_path`, raw translations are memoized (keyed on
+  source/target language, model, and a hash of the source text). Re-translating a
+  refreshed export only pays for changed cells.
+- **De-duplication.** Identical source strings are translated once per run.
+- **Skip-list.** Empty cells, pure numbers, single letters, and survey codes
+  (`N/A`, `999`, `-99`, ...) are never sent.
+- **Preserve originals.** A `<column>_<target_language>` column is added next to
+  each source column; it never overwrites, and refuses to run if that column
+  already exists.
 
-## Workflow: translate columns in a CSV
+## Workflow
 
-1. **Confirm credentials are set up.** Run the credential check (or just try the
-   operation). If it raises a "no credentials configured" error, switch to the
-   coaching flow in [`google-cloud-credentials.md`](google-cloud-credentials.md).
-   Confirm the client library is installed (`pip install google-cloud-translate`).
-2. **Identify the columns.** Read the CSV header (column names only; you do not
-   need to read the data) and work out which columns hold free text versus
-   codes, IDs, or numbers. Ask the user which columns to translate if they have
-   not said.
-3. **Get the target language** as an ISO 639-1 code (`en`, `es`, `fr`, `sw`,
-   ...). Ask if unspecified.
-4. **Estimate cost and show the PII warning.** Call `estimate_cost(...)`. Show
-   the user the billable character count, the estimated USD cost, whether it
-   falls in the free tier, and the one-line privacy reminder that the source
-   text will be sent to Google's servers. Keep the privacy reminder on every
-   run; it can be brief on later runs in the same session.
-5. **Wait for explicit confirmation.** Do not proceed until the user confirms.
-   Never run translation without showing the cost first, even if the user said
-   "just do it" up front. Show the cost, then ask once.
-6. **Detect source languages if mixed or unknown.** If the user is not sure of
-   the source language, or the column may mix languages, run
-   `detect_languages(...)` on a sample and report what you find. Pass
-   `source_language=None` to `translate_csv` to let the API auto-detect per
-   cell, or pass a fixed code if the column is uniform.
-7. **Translate.** Call `translate_csv(...)` with `confirm=True` and a
-   `cache_path` so re-runs are cheap. Use a glossary if the user has one (see
-   below).
-8. **Report.** Tell the user the output path and summarize the returned stats:
-   how many cells were translated, served from cache, and skipped, and how many
-   characters were actually billed. Do not paste the translated content into the
-   conversation unless the user explicitly asks to see specific rows.
+1. **Confirm credentials and environment.** If a "no OpenAI API key configured"
+   error appears, switch to the coaching in
+   [`openai-credentials.md`](openai-credentials.md). Make sure the client library
+   is installed by running the bootstrap once (`python3 setup_env.py`); it prints
+   a `VENV_PYTHON=<path>` line. Run the module with that interpreter. Do not rely
+   on a bare `pip install openai`, which fails with
+   `externally-managed-environment` (PEP 668) on modern macOS and Debian/Ubuntu.
+2. **Identify the columns** to translate (read only the header; you do not need to
+   read the data). Ask the user if unsure.
+3. **Get the target language** as an ISO 639-1 code (`en`, `es`, `fr`, `sw`, ...).
+4. **Estimate cost and show the PII warning.** Call `estimate_cost(...)`. Show the
+   cell count, the approximate USD cost, and the one-line privacy reminder that the
+   text is sent to OpenAI. Keep the privacy reminder on every run.
+5. **Wait for explicit confirmation.** Never translate without showing the cost
+   first, even if the user said "just do it" up front.
+6. **Translate.** Call `translate_csv(...)` with `confirm=True` and a `cache_path`
+   so re-runs are cheap. Pass `source_language=None` to let the model auto-detect
+   per cell (handles mixed-language columns).
+7. **Report, including spend.** Give the output path and the returned stats
+   (translated, cached, skipped, chars sent). Always tell the user what this run
+   actually cost and the running total: report `actual_usd_display` ("this run")
+   and `total_spend_usd_display` ("total so far on this machine"). Do this on
+   every paid run, not just the first. Do not paste translated content into chat
+   unless asked for specific rows.
 
-Example (inside a generated script):
+### Running it: use the CLI
+
+Prefer the CLI: it handles credentials itself (`configure_openai()`) and prints
+JSON you can report from. Run it with the interpreter that `setup_env.py` printed
+(`VENV_PYTHON=<path>`); `python3` alone will not have `openai` installed. `PY`
+below is that path, and `translation.py` lives in the skill's
+`assets/transcribe-translate/` directory.
+
+```bash
+PY=<the VENV_PYTHON path from setup_env.py>
+# 1. estimate: shows cells_to_translate, estimated_usd_display, pii_warning -> show the user, get confirmation
+"$PY" translation.py estimate responses.csv --columns q_open,comments --target en
+# 2. translate (only after confirmation). Omit --source to auto-detect mixed-language columns.
+"$PY" translation.py translate responses.csv --columns q_open,comments \
+    --target en --output responses_en.csv --cache translation-cache.db --confirm
+```
+
+Equivalent inside a generated Python script (run under the same interpreter):
 
 ```python
-import google_cloud_auth
-import translation
-
-google_cloud_auth.configure_google_auth()
-
-est = translation.estimate_cost("responses.csv", ["q_open", "comments"], "en")
-# show est["estimated_usd"], est["cells_to_translate"], est["pii_warning"] to the user
-# ... after the user confirms ...
+import openai_auth, translation
+openai_auth.configure_openai()
+est = translation.estimate_cost("responses.csv", ["q_open","comments"], "en")
+# show est["estimated_usd_display"], est["cells_to_translate"], est["pii_warning"]; confirm
 stats = translation.translate_csv(
-    "responses.csv",
-    ["q_open", "comments"],
-    target_language="en",
-    source_language=None,        # auto-detect per cell
-    output_path="responses_en.csv",
-    cache_path="translation-cache.db",
-    confirm=True,
-)
+    "responses.csv", ["q_open","comments"], target_language="en",
+    source_language=None, output_path="responses_en.csv",
+    cache_path="translation-cache.db", confirm=True)   # model="cheap" by default
 print(stats["output_path"], stats["cells_translated"], stats["cells_cached"])
 ```
 
 ## Glossary handling
 
-A glossary enforces the user's preferred rendering of recurring domain terms
-(household, enumerator, plot, and so on). The glossary is a CSV with a `source`
-column and either a `target` column or per-language `target_<lang>` columns:
+A glossary CSV (`source` + `target` or `target_<lang>` columns) enforces preferred
+renderings of recurring terms. It is applied **after** translation as a
+re-runnable overlay (the cache stores the raw translation, so changing the glossary
+does not force a re-translation). The match is a case-insensitive whole-phrase
+replacement, longest terms first; curate accordingly (it does not handle
+inflection).
 
 ```csv
 source,target_es,target_fr
 household roster,roster del hogar,liste des membres du ménage
-anthropometry,antropometría,anthropométrie
 enumerator,encuestador,enquêteur
 ```
 
-`translate_csv` applies the glossary **after** the API call by default: the
-model produces fluent output and the glossary then overrides terminology on top.
-This is more robust than pre-substituting terms (which risks ungrammatical
-output when the target term does not inflect the way the source did), at the
-cost of paying to translate terms that get overridden. The substitution is a
-simple case-insensitive whole-phrase replacement, longest terms first; it does
-not handle inflection or agreement, so curate the glossary with that in mind.
-
 ## Caching and re-runs
 
-Pass a `cache_path` (for example `translation-cache.db`) so that re-translating
-a refreshed export only pays for changed cells. The cache contains source text
-and translations, so it is sensitive. Store it alongside the user's data, not in
-a shared or version-controlled location. The skill `.gitignore` template ignores
-the default cache names; if the user keeps their work in a git repository,
-confirm the cache is ignored.
-
-## Mixed-language columns
-
-If a single column mixes languages (Spanish and Quechua cells, say), the default
-behavior translates each cell into the target language regardless of its source
-(best for downstream analysis). If the user would rather preserve nuance and
-handle mixed cells manually, run `detect_languages` first and discuss the split
-with them before translating.
-
-## Limits and out of scope
-
-- This translates data in CSV exports. It does not translate form definitions
-  (labels, choice lists); that is form-label translation, see
-  [`translation.md`](translation.md).
-- It uses Google Cloud Translation standard NMT. DeepL, Azure, custom-trained
-  models, and Google's LLM translation mode are out of scope.
-- Very large files are handled by batching and caching, not by streaming; for
-  extremely large exports, translate the columns the user actually needs rather
-  than the whole file.
+Pass a `cache_path` (e.g. `translation-cache.db`) so re-translating a refreshed
+export only pays for changed cells. The cache contains source text and
+translations, so it is sensitive: keep it with the user's data, not in a shared or
+version-controlled location.
 
 ## Quality reminder
 
 Machine translation of open-ended data is a starting point, not a finished
-product. For anything that will drive analysis or reporting, recommend that a
-fluent speaker spot-check a sample of the output, especially for sensitive or
-high-stakes items. This is a recommendation, not a gate; the user decides what
-is appropriate for their context.
+product. For anything driving analysis or reporting, recommend a fluent speaker
+spot-check a sample of the output. This is a recommendation, not a gate.
