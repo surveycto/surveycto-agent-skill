@@ -2,24 +2,19 @@
 name: surveycto
 description: >
   Design, edit, debug, and convert SurveyCTO forms (XLSForm .xlsx with
-  survey/choices/settings sheets), server datasets (.xml with a dataset
-  root element), Data Explorer workbook definitions, and field plug-ins
-  (.fieldplugin.zip bundles attached via `custom-name` appearances).
-  Covers form logic, expressions, choice lists, repeat groups, skip
-  patterns, constraints, calculations, dataset publishing, and case
-  management. Also covers converting forms from KoboToolbox/ODK
-  XLSForms, CommCare XForms XML, Qualtrics .qsf JSON, and other sources
-  into SurveyCTO XLSForms. Also covers translating exported response
-  data (CSV columns of open-ended answers, enumerator notes) into
-  another language and transcribing audio captures (audio-audit
-  recordings, voice responses), both via cloud services with safe
-  credential handling. Use when the user mentions SurveyCTO, XLSForm,
-  ODK-based forms, survey forms, or data collection forms; when working
-  with relevant .xlsx, .xml, or .fieldplugin.zip files; when converting
-  a form from another platform; or when translating or transcribing
-  exported SurveyCTO response data or audio. New XLSForms always start
-  from the bundled template at assets/xlsform-template.xlsx, never built
-  from scratch.
+  survey/choices/settings sheets), server datasets (.xml), Data Explorer
+  workbook definitions, and field plug-ins (.fieldplugin.zip bundles using
+  `custom-name` appearances). Covers form logic, expressions, choice lists,
+  repeat groups, skip patterns, constraints, calculations, dataset publishing,
+  and case management; converting forms from KoboToolbox/ODK XLSForms, CommCare
+  XForms XML, and Qualtrics .qsf JSON; and translating or transcribing exported
+  response data (open-ended answers, enumerator notes, audio-audit recordings,
+  voice responses) via cloud services. Use when the user mentions SurveyCTO,
+  XLSForm, ODK-based forms, survey forms, or data collection forms; works with
+  .xlsx, .xml, or .fieldplugin.zip files; converts a form from another platform;
+  or translates/transcribes exported SurveyCTO data or audio. New XLSForms
+  always start from the bundled template at assets/xlsform-template.xlsx, never
+  built from scratch.
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
