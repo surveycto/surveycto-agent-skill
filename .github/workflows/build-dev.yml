@@ -30,7 +30,6 @@ jobs:
           python3 tests/test_transcription.py
           python3 tests/test_setup_env.py
           python3 tests/test_usage_ledger.py
-          python3 tests/test_system_check.py
 
       - name: Test dataset validator
         run: python3 tests/test_dataset_validation.py

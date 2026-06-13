@@ -105,8 +105,7 @@ Run the shipped bootstrap once. It creates an isolated environment and installs
 `openai` into it:
 
 ```
-python3 setup_env.py            # cloud translation + transcription
-python3 setup_env.py --local    # also installs faster-whisper for --provider local
+python3 setup_env.py            # translation + transcription
 ```
 
 It prints the environment's Python interpreter on the last line as
@@ -138,7 +137,7 @@ Both paid workflows record actual cost after each run in a small ledger at
 text, transcripts, or the key). `translate_csv`/`transcribe_files` return
 `actual_usd_display` (this run) and `total_spend_usd_display` (cumulative on this
 machine); surface both to the user on every paid run so they always know what
-they are spending. The local transcription provider is free and records nothing.
+they are spending.
 
 The user (or you) can see the running total at any time:
 

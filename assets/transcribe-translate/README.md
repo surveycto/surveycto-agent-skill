@@ -18,23 +18,21 @@ Read the reference primers for the agent-facing workflow:
 | --- | --- | --- |
 | `openai_auth.py` | Resolve the OpenAI key (env or chmod-600 config), set `OPENAI_API_KEY`, never print it. | standard library only |
 | `translation.py` | estimate_cost, translate_csv (selectable chat model, length-validated structured output, dedup, cache, skip-list, glossary). | standard library only |
-| `transcription.py` | estimate_cost, transcribe_files (selectable model, automatic chunking, optional local Whisper, cache). | standard library only |
-| `setup_env.py` | One-time bootstrap: create the isolated venv and install `openai` (and `faster-whisper` with `--local`). | standard library only |
+| `transcription.py` | estimate_cost, transcribe_files (selectable model, automatic chunking, cache). | standard library only |
+| `setup_env.py` | One-time bootstrap: create the isolated venv and install `openai`. | standard library only |
 | `usage_ledger.py` | Record actual OpenAI spend per run and a cumulative total at `~/.surveycto-skill/spend-ledger.json`; `show`/`reset` CLI. | standard library only |
-| `system_check.py` | Detect OS/CPU/RAM/NVIDIA-GPU (Windows/Linux/macOS) and recommend a local Whisper model size for the machine. | standard library only |
 
 `openai` is imported lazily, only when a call reaches the API, so the modules
 import and their logic is unit-testable offline.
 
-Both paid workflows report `actual_usd_display` (this run) and
+Both workflows report `actual_usd_display` (this run) and
 `total_spend_usd_display` (cumulative) so the user is always told what they spent;
-see `python3 usage_ledger.py show`. The local transcription provider is free.
+see `python3 usage_ledger.py show`.
 
 Install with the shipped bootstrap (run once):
 
 ```
-python3 setup_env.py            # cloud translation + transcription
-python3 setup_env.py --local    # also installs faster-whisper for --provider local
+python3 setup_env.py            # translation + transcription
 ```
 
 It creates an isolated environment at `~/.surveycto-skill/venv`, installs the
@@ -52,8 +50,7 @@ long files). Install it with `brew install ffmpeg` (macOS),
 ## Model selection (cheapest is the default)
 
 - Translation: `--model cheap` (gpt-4.1-nano, default) or `better` (gpt-4o-mini), or a model id.
-- Transcription: `--model fast` (gpt-4o-mini-transcribe, default), `accurate` (gpt-4o-transcribe), or `whisper` (whisper-1); or `--provider local` for on-device Whisper (faster-whisper).
-  - Local provider: no key/cost, audio stays on the machine, but needs a one-time model download (default `small` is ~464 MB) and local compute. Best on an NVIDIA GPU; works well on a recent multi-core CPU / Apple Silicon (CPU-only there, ~8-9x faster than realtime for `small`); use `tiny`/`base` on weak hardware. Run `python3 system_check.py` to detect the machine and get a recommended model. See `references/audio-transcription.md` for the model/size/RAM table and download-time estimates.
+- Transcription: `--model fast` (gpt-4o-mini-transcribe, default), `accurate` (gpt-4o-transcribe), or `whisper` (whisper-1).
 
 ## Quick use (CLI)
 
@@ -69,7 +66,7 @@ PY=<the VENV_PYTHON path from setup_env.py>
 "$PY" translation.py translate data.csv --columns notes --target en \
     --output data_en.csv --cache translation-cache.db --confirm
 
-# transcribe (needs ffmpeg on PATH; add --provider local to keep audio on-device)
+# transcribe (needs ffmpeg on PATH)
 "$PY" transcription.py estimate a.mp3
 "$PY" transcription.py transcribe a.mp3 --output out.csv \
     --cache transcription-cache.db --confirm

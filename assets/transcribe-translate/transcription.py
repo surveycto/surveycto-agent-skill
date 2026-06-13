@@ -1,37 +1,33 @@
-"""Transcribe audio files to text via OpenAI (default) or a local Whisper model.
+"""Transcribe audio files to text via OpenAI.
 
 Supports the audio-transcription workflow in
 ``references/audio-transcription.md``. SurveyCTO audio captures (audio-audit
 recordings, open-ended voice responses) are sensitive, so the content is sent
-straight to the transcription backend by a script and the transcripts are
-written to a CSV; the agent orchestrates and reports without ingesting the audio.
+straight to OpenAI by a script and the transcripts are written to a CSV; the
+agent orchestrates and reports without ingesting the audio.
 
-Provider/model selection (the user picks; the cheapest is the default):
+Model selection (the user picks; the cheapest is the default):
 
-  transcription model menu (OpenAI cloud):
     "fast"     -> gpt-4o-mini-transcribe   (DEFAULT; cheapest, ~$0.003/min)
     "accurate" -> gpt-4o-transcribe        (~$0.006/min)
     "whisper"  -> whisper-1                (~$0.006/min; no duration cap, only 25 MB)
   An explicit model id (e.g. "gpt-4o-transcribe") is also accepted.
-  provider="local" runs Whisper on-device via faster-whisper (no API, no cost,
-  for data-residency/offline use); model is a Whisper size ("small" default).
 
 Long files are handled automatically: OpenAI limits a request to ~25 MB, and the
 gpt-4o-* models also cap audio by a token/context limit (~15 min of speech,
 content dependent), so files over either limit are split with ffmpeg into
 compliant chunks (with a small overlap so words at a cut are not dropped; the
 overlap's duplicated words are removed when the pieces are stitched). whisper-1
-has no duration cap, so a sub-25 MB long file goes in one request. Local has no
-limits.
+has no duration cap, so a sub-25 MB long file goes in one request.
 
 Auth: ``openai_auth.configure_openai()`` sets ``OPENAI_API_KEY`` for the SDK
 without ever printing the key. Cost gate: ``transcribe_files`` refuses to run
 unless ``confirm=True``; call ``estimate_cost`` and confirm first. Cache: with a
-``cache_path``, transcripts are memoized (keyed on file bytes + model/provider)
-so re-runs are free. Sanitized errors: an API error never echoes audio content.
+``cache_path``, transcripts are memoized (keyed on file bytes + model) so re-runs
+are free. Sanitized errors: an API error never echoes audio content.
 
-Standard library only at import time; ``openai`` (and, for local, faster-whisper)
-are imported lazily only when a call is made.
+Standard library only at import time; ``openai`` is imported lazily only when a
+call is made.
 """
 
 from __future__ import annotations
@@ -74,21 +70,8 @@ _PII_WARNING = (
     "PRIVACY: the selected audio will be sent to OpenAI (a third-party service) "
     "for transcription. Audio recordings carry respondents' voices and often "
     "spoken PII (names, locations). Confirm this transfer is acceptable under the "
-    "user's data-governance rules before transcribing. (Use provider='local' to "
-    "keep audio on-device.)"
+    "user's data-governance rules before transcribing."
 )
-
-_PII_WARNING_LOCAL = (
-    "PRIVACY: transcription runs on-device (provider='local'); the audio is NOT "
-    "sent to OpenAI or any third party. Note the output CSV and the cache file "
-    "hold the transcript text (often spoken PII), so keep them with the user's "
-    "data and out of shared or cloud-synced locations."
-)
-
-
-def _pii_warning(provider: str) -> str:
-    """Provider-appropriate privacy notice (local mode must not claim an upload)."""
-    return _PII_WARNING_LOCAL if provider == "local" else _PII_WARNING
 
 _AUDIO_EXTS = {".wav", ".flac", ".mp3", ".m4a", ".ogg", ".opus", ".webm", ".aac", ".amr"}
 
@@ -143,19 +126,17 @@ def _usd_display(usd: float) -> str:
     return f"${usd:.2f}"
 
 
-def estimate_cost(audio_paths: list[str], model: str | None = None,
-                  provider: str = "openai") -> dict:
+def estimate_cost(audio_paths: list[str], model: str | None = None) -> dict:
     """Estimate transcription cost for the given files.
 
     :param audio_paths: Paths to audio files.
-    :param model: Menu name or model id (ignored for provider='local').
-    :param provider: ``"openai"`` (default) or ``"local"`` (cost 0).
+    :param model: Menu name or model id.
     :returns: Dict with ``known_seconds``, ``estimated_usd``, ``files``,
         ``unknown_duration`` (paths whose duration could not be read),
-        ``model``, ``provider``, and ``pii_warning``.
+        ``model``, and ``pii_warning``.
     """
     spec = resolve_model(model)
-    rate = 0.0 if provider == "local" else spec["usd_per_min"]
+    rate = spec["usd_per_min"]
     known = 0.0
     unknown: list[str] = []
     usd = 0.0
@@ -172,16 +153,15 @@ def estimate_cost(audio_paths: list[str], model: str | None = None,
     return {
         "known_seconds": round(known, 2),
         "estimated_usd": round(usd, 4),
-        "estimated_usd_display": "$0.00 (free, on-device)" if provider == "local" else _usd_display(usd),
+        "estimated_usd_display": _usd_display(usd),
         "files": len(audio_paths),
         "unknown_duration": unknown,
-        "model": spec["id"] if provider != "local" else f"local:{model or 'small'}",
-        "provider": provider,
-        "pii_warning": _pii_warning(provider),
+        "model": spec["id"],
+        "pii_warning": _PII_WARNING,
     }
 
 
-# ---- chunking + providers -------------------------------------------------
+# ---- chunking -------------------------------------------------------------
 
 class TranscriptionError(RuntimeError):
     """A transcription failure whose message is safe to surface.
@@ -270,14 +250,6 @@ def _transcribe_openai_file(path: str, model_id: str, client=None) -> str:
     return getattr(resp, "text", "") or ""
 
 
-def _transcribe_local_file(path: str, local_model: str) -> str:
-    """Transcribe one file on-device via faster-whisper (no API, no limits)."""
-    from faster_whisper import WhisperModel  # noqa: PLC0415
-    model = WhisperModel(local_model or "small", device="auto", compute_type="int8")
-    segments, _info = model.transcribe(path)
-    return " ".join(seg.text.strip() for seg in segments).strip()
-
-
 def _fits_whole(path: str, spec: dict) -> bool:
     """Whether the file is within both the size and (model) duration limits."""
     if os.path.getsize(path) > _MAX_BYTES:
@@ -316,11 +288,8 @@ def _transcribe_segment(src: str, start: float, length: float, model_id: str,
     return _stitch(left, right)
 
 
-def _transcribe_one(path: str, spec: dict, provider: str, local_model: str,
-                    client) -> str:
-    """Transcribe one file: local, single-request, or windowed+adaptive chunks."""
-    if provider == "local":
-        return _transcribe_local_file(path, local_model)
+def _transcribe_one(path: str, spec: dict, client) -> str:
+    """Transcribe one file: single-request, or windowed + adaptive chunks."""
     if _fits_whole(path, spec):
         try:
             return _transcribe_openai_file(path, spec["id"], client)
@@ -395,9 +364,9 @@ def _file_hash(path: str) -> str:
 # ---- public API -----------------------------------------------------------
 
 def transcribe_files(audio_paths: list[str], output_path: str,
-                     model: str | None = None, provider: str = "openai",
+                     model: str | None = None,
                      cache_path: str | None = None, confirm: bool = False,
-                     local_model: str = "small", client=None) -> dict:
+                     client=None) -> dict:
     """Transcribe audio files and write a CSV of results.
 
     Output columns: ``file``, ``transcript``, ``backend``, ``duration_seconds``,
@@ -407,10 +376,8 @@ def transcribe_files(audio_paths: list[str], output_path: str,
     :param audio_paths: Paths to audio files.
     :param output_path: Where to write the results CSV.
     :param model: Menu name (``fast``/``accurate``/``whisper``) or model id.
-    :param provider: ``"openai"`` (default) or ``"local"``.
     :param cache_path: Optional SQLite cache path.
     :param confirm: Must be ``True`` to run (cost gate).
-    :param local_model: Whisper size for provider='local'.
     :param client: Optional injected client (testing).
     :returns: Dict with ``transcribed``, ``cached``, ``failed``, ``backend``,
         ``output_path``.
@@ -423,10 +390,10 @@ def transcribe_files(audio_paths: list[str], output_path: str,
             "confirmation."
         )
     spec = resolve_model(model)
-    backend = f"local:{local_model}" if provider == "local" else spec["id"]
+    backend = spec["id"]
     cache_conn = _cache_connect(cache_path) if cache_path else None
     stats = {"transcribed": 0, "cached": 0, "failed": 0}
-    billed_seconds = 0.0  # audio actually sent to OpenAI this run (local = free)
+    billed_seconds = 0.0  # audio actually sent to OpenAI this run
     rows: list[dict] = []
     try:
         for path in audio_paths:
@@ -450,7 +417,7 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                     stats["cached"] += 1
                 else:
                     try:
-                        text = _transcribe_one(path, spec, provider, local_model, client)
+                        text = _transcribe_one(path, spec, client)
                     except TranscriptionError:
                         # message is safe by construction; surface as-is
                         raise
@@ -469,7 +436,7 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                         cache_conn.commit()
                 dur = _audio_duration_seconds(path)
                 row["duration_seconds"] = dur
-                if fresh and provider != "local" and dur:
+                if fresh and dur:
                     billed_seconds += dur
             except FileNotFoundError:
                 # never echo the path here; it is already in the `file` column
@@ -498,10 +465,10 @@ def transcribe_files(audio_paths: list[str], output_path: str,
     stats["output_path"] = output_path
 
     # actual spend: bill on the audio minutes actually sent to OpenAI this run
-    # (local provider and cache hits are free and record nothing). Billed on each
-    # file's measured duration; a chunked long file re-sends a ~1s overlap per
-    # seam, so this is a close lower bound on true billed minutes, not exact.
-    if provider != "local" and billed_seconds > 0:
+    # (cache hits are free and record nothing). Billed on each file's measured
+    # duration; a chunked long file re-sends a ~1s overlap per seam, so this is a
+    # close lower bound on true billed minutes, not exact.
+    if billed_seconds > 0:
         actual_usd = _billed_minutes(billed_seconds) * spec["usd_per_min"]
         units = f"{billed_seconds / 60:.1f} audio-min"
         spend = usage_ledger.record("transcribe", spec["id"], units, actual_usd)
@@ -518,49 +485,42 @@ def transcribe_files(audio_paths: list[str], output_path: str,
 
 def _main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
-        description="Transcribe audio via OpenAI or local Whisper. Run 'estimate' "
-                    "first to see cost and the privacy warning, then "
-                    "'transcribe --confirm'. Long files are chunked automatically.",
+        description="Transcribe audio via OpenAI. Run 'estimate' first to see cost "
+                    "and the privacy warning, then 'transcribe --confirm'. Long "
+                    "files are chunked automatically.",
         epilog="Examples:\n"
                "  python transcription.py estimate interview.mp3\n"
                "  python transcription.py transcribe interview.mp3 \\\n"
                "      --output transcripts.csv --cache transcription-cache.db --confirm\n"
-               "  python transcription.py transcribe a.mp3 b.mp3 --provider local --output t.csv --confirm\n"
                "Output CSV columns: file, transcript, backend, duration_seconds, status.\n"
-               "OpenAI transcription needs ffmpeg/ffprobe on PATH (duration + chunking).",
+               "Needs ffmpeg/ffprobe on PATH (duration + chunking).",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     pe = sub.add_parser("estimate", help="show duration, approx cost, and the PII warning")
     pe.add_argument("audio_paths", nargs="+", help="one or more audio file paths")
     pe.add_argument("--model", default=None, help="fast (default) | accurate | whisper | model id")
-    pe.add_argument("--provider", default="openai", choices=["openai", "local"],
-                    help="openai (default) or local (on-device, no cost)")
     pt = sub.add_parser("transcribe", help="transcribe the audio and write a results CSV")
     pt.add_argument("audio_paths", nargs="+", help="one or more audio file paths")
     pt.add_argument("--output", required=True, help="path for the results CSV")
     pt.add_argument("--model", default=None,
                     help="fast (default, gpt-4o-mini-transcribe) | accurate | whisper | model id")
-    pt.add_argument("--provider", default="openai", choices=["openai", "local"],
-                    help="openai (default) or local (faster-whisper, on-device, no cost)")
-    pt.add_argument("--local-model", default="small", help="Whisper size for --provider local")
     pt.add_argument("--cache", default=None, help="optional SQLite cache path so re-runs are free")
     pt.add_argument("--confirm", action="store_true", help="required: confirms you accepted the cost/PII")
     args = p.parse_args(argv)
 
     if args.cmd == "estimate":
-        print(json.dumps(estimate_cost(args.audio_paths, args.model, args.provider), indent=2))
+        print(json.dumps(estimate_cost(args.audio_paths, args.model), indent=2))
         return 0
     if args.cmd == "transcribe":
         if not args.confirm:
             print("Refusing to transcribe without --confirm. Run 'estimate' first "
                   "and confirm the cost with the user.", file=sys.stderr)
             return 1
-        if args.provider == "openai":
-            import openai_auth
-            openai_auth.configure_openai()
+        import openai_auth
+        openai_auth.configure_openai()
         print(json.dumps(transcribe_files(
-            args.audio_paths, args.output, model=args.model, provider=args.provider,
-            cache_path=args.cache, confirm=True, local_model=args.local_model), indent=2))
+            args.audio_paths, args.output, model=args.model,
+            cache_path=args.cache, confirm=True), indent=2))
         return 0
     return 2
 
