@@ -58,6 +58,28 @@ def test_key_file_handoff_imports_and_deletes() -> None:
         assert mode == 0o600, oct(mode)
 
 
+def test_read_deny_rules_merge_without_clobbering() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        settings = Path(d) / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        # pre-existing settings with an unrelated allow + deny entry must survive
+        settings.write_text(json.dumps(
+            {"permissions": {"allow": ["Bash(ls)"], "deny": ["Read(secrets.env)"]}}),
+            encoding="utf-8")
+        added = auth.add_read_deny_rules("openai-key.txt", str(settings))
+        assert added, "expected deny patterns to be added"
+        data = json.loads(settings.read_text())
+        deny = data["permissions"]["deny"]
+        assert "Read(secrets.env)" in deny                 # existing entry preserved
+        assert data["permissions"]["allow"] == ["Bash(ls)"]  # unrelated key preserved
+        assert any("openai-key.txt" in p for p in deny)
+        assert any("openai-config.json" in p for p in deny)
+        # idempotent: a second call doesn't duplicate
+        auth.add_read_deny_rules("openai-key.txt", str(settings))
+        deny2 = json.loads(settings.read_text())["permissions"]["deny"]
+        assert len(deny2) == len(deny)
+
+
 def test_save_tightens_preexisting_loose_permissions() -> None:
     import stat
     with tempfile.TemporaryDirectory() as d:

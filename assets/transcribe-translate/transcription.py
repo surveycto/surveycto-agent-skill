@@ -96,6 +96,28 @@ def resolve_model(model: str | None) -> dict:
     }
 
 
+_NO_EGRESS_MSG = (
+    "could not reach OpenAI (api.openai.com); network egress is likely disabled. "
+    "On claude.ai enable it under Settings > Capabilities; on Team/Enterprise the "
+    "default blocks third-party APIs, so ask an admin to allowlist api.openai.com "
+    "(see references/openai-credentials.md)"
+)
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    """True if the error looks like a blocked/failed network connection (so we can
+    give actionable egress guidance). Matched on class name and generic phrases."""
+    name = type(exc).__name__.lower()
+    if any(k in name for k in ("connection", "timeout", "connecterror")):
+        return True
+    msg = str(exc).lower()
+    return any(s in msg for s in (
+        "connection error", "failed to establish", "getaddrinfo",
+        "name or service not known", "temporary failure in name resolution",
+        "network is unreachable", "connection refused", "no route to host",
+    ))
+
+
 def _audio_duration_seconds(path: str) -> float | None:
     """Return audio duration in seconds via ffprobe, or None if unavailable."""
     if not shutil.which("ffprobe"):
@@ -434,6 +456,10 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                         # message is safe by construction; surface as-is
                         raise
                     except Exception as exc:
+                        # a blocked network is common in locked-down environments;
+                        # give actionable egress guidance rather than an opaque name
+                        if _is_connection_error(exc):
+                            raise TranscriptionError(_NO_EGRESS_MSG) from None
                         # sanitize: an API/library error could echo request content
                         raise TranscriptionError(
                             f"transcription failed ({type(exc).__name__})"

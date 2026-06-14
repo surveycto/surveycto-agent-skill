@@ -266,6 +266,30 @@ def _is_retryable(exc: Exception) -> bool:
     return True
 
 
+_NO_EGRESS_MSG = (
+    "Could not reach OpenAI (api.openai.com). This environment likely has network "
+    "egress disabled. On claude.ai: Settings > Capabilities > enable network "
+    "egress; on Team/Enterprise the default blocks third-party APIs, so ask an "
+    "admin to allowlist api.openai.com (Organization settings > Capabilities). "
+    "See references/openai-credentials.md. No key or data was exposed."
+)
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    """True if the error looks like a blocked/failed network connection (not an
+    API/auth error), so we can give actionable egress guidance. Matched on class
+    name and generic phrases, never echoing any content."""
+    name = type(exc).__name__.lower()
+    if any(k in name for k in ("connection", "timeout", "connecterror")):
+        return True
+    msg = str(exc).lower()
+    return any(s in msg for s in (
+        "connection error", "failed to establish", "getaddrinfo",
+        "name or service not known", "temporary failure in name resolution",
+        "network is unreachable", "connection refused", "no route to host",
+    ))
+
+
 def _usage_tokens(resp) -> tuple[int, int] | None:
     """(prompt_tokens, completion_tokens) from a chat response, or None if absent.
 
@@ -326,6 +350,8 @@ def _translate_batch(client, texts: list[str], target_language: str,
         except Exception as exc:
             attempt += 1
             if attempt > max_retries or not _is_retryable(exc):
+                if _is_connection_error(exc):
+                    raise RuntimeError(_NO_EGRESS_MSG) from None
                 raise RuntimeError(
                     f"translation API call failed ({type(exc).__name__})") from None
             time.sleep(min(2 ** attempt, 30))

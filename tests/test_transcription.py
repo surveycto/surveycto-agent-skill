@@ -119,6 +119,22 @@ def test_confirm_gate() -> None:
         raise AssertionError("expected PermissionError without confirm")
 
 
+def test_no_egress_gives_actionable_error() -> None:
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 10.0
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            boom = FakeClient(lambda data: (_ for _ in ()).throw(
+                ConnectionError("Failed to establish a new connection")))
+            s = X.transcribe_files([str(a)], str(out), confirm=True, client=boom)
+            assert s["failed"] == 1, s
+            status = _read(out)[0]["status"]
+            assert "api.openai.com" in status and "egress" in status.lower(), status
+    finally:
+        X._audio_duration_seconds = orig
+
+
 def test_unmeasurable_duration_fails_no_silent_zero_spend() -> None:
     # if ffprobe can't read duration, a paid call must NOT happen and must NOT be
     # booked as $0.00 (that silently under-reports spend)

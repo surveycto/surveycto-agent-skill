@@ -80,6 +80,7 @@ def save_api_key(key: str) -> None:
         json.dump({_CONFIG_KEY: key}, f, indent=2)
 
 
+_DEFAULT_KEY_FILE = "openai-key.txt"
 _KEY_FILE_PLACEHOLDER = "PASTE_YOUR_OPENAI_API_KEY_HERE"
 _KEY_FILE_TEMPLATE = (
     "# SurveyCTO skill: OpenAI API key\n"
@@ -112,6 +113,52 @@ def write_key_template(path: str) -> str:
     except OSError:
         pass
     return str(p)
+
+
+def add_read_deny_rules(key_file_path: str = _DEFAULT_KEY_FILE,
+                        settings_path: str = ".claude/settings.json") -> list[str]:
+    """Best-effort: add ``Read`` deny rules for the key file and config to the
+    project's ``.claude/settings.json`` (merging, never clobbering).
+
+    This is defense-in-depth only. It gates the agent's ``Read`` tool (verified
+    enforced), but it does NOT stop a ``bash cat`` / ``open()`` of the file, and a
+    mid-session change may not take effect until the next session. The real
+    protection is that the key is imported without the agent reading the file and
+    the file is deleted afterward. Returns the deny patterns now present (or [] on
+    failure); never raises.
+    """
+    patterns = [
+        f"Read({key_file_path})",
+        f"Read(./{key_file_path})",
+        f"Read({CONFIG_PATH})",
+        "Read(~/.surveycto-skill/openai-config.json)",
+    ]
+    try:
+        sp = Path(settings_path)
+        data = {}
+        if sp.is_file():
+            try:
+                loaded = json.loads(sp.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data = loaded
+            except ValueError:
+                return []  # don't clobber a settings file we can't parse
+        perms = data.get("permissions")
+        if not isinstance(perms, dict):
+            perms = {}
+            data["permissions"] = perms
+        deny = perms.get("deny")
+        if not isinstance(deny, list):
+            deny = []
+            perms["deny"] = deny
+        for pat in patterns:
+            if pat not in deny:
+                deny.append(pat)
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        sp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        return [d for d in deny if d in patterns]
+    except OSError:
+        return []
 
 
 def import_key_file(path: str, delete_after: bool = True) -> str:
@@ -225,9 +272,6 @@ _USAGE = (
     "                                            avoid in Cowork/shared shells - it is logged)"
 )
 
-_DEFAULT_KEY_FILE = "openai-key.txt"
-
-
 def _main(argv: list[str]) -> int:
     """CLI entry point. Never prints the raw key (only a masked form)."""
     if argv and argv[0] in ("-h", "--help"):
@@ -237,6 +281,10 @@ def _main(argv: list[str]) -> int:
         path = argv[1] if len(argv) >= 2 else _DEFAULT_KEY_FILE
         written = write_key_template(path)
         print(f"Wrote key file: {written}")
+        denied = add_read_deny_rules(path)
+        if denied:
+            print("Added best-effort Read-deny rules to .claude/settings.json "
+                  "(gates the Read tool only; not a hard block).")
         print("Ask the user to open it, replace the placeholder with their OpenAI "
               "API key, and save. Then run: python3 openai_auth.py import-file "
               f"{written}")

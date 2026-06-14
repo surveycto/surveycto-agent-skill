@@ -368,6 +368,41 @@ def test_cache_file_is_chmod_600() -> None:
         assert mode == 0o600, oct(mode)
 
 
+def test_no_egress_gives_actionable_error() -> None:
+    real_sleep = T.time.sleep; T.time.sleep = lambda s: None
+    try:
+        class APIConnectionError(Exception):
+            pass
+        class Boom(FakeClient):
+            def __init__(self):
+                super().__init__()
+                class C:
+                    def create(self2, **kw):
+                        raise APIConnectionError("Connection error.")
+                self.chat = _Chat(C())
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+            _write(p, ["note"], [{"note": "hola"}])
+            try:
+                T.translate_csv(str(p), ["note"], "en", "es", str(out), client=Boom(), confirm=True)
+            except RuntimeError as exc:
+                m = str(exc)
+                assert "api.openai.com" in m and "egress" in m.lower(), m
+                assert "hola" not in m  # no source text leaked
+                return
+            raise AssertionError("expected an egress RuntimeError")
+    finally:
+        T.time.sleep = real_sleep
+
+
+def test_is_connection_error_classifies() -> None:
+    class APITimeoutError(Exception): pass
+    assert T._is_connection_error(APITimeoutError("x"))
+    assert T._is_connection_error(Exception("Connection error."))
+    assert T._is_connection_error(Exception("Failed to establish a new connection"))
+    assert not T._is_connection_error(Exception("invalid api key"))
+
+
 def test_glossary_is_word_bounded() -> None:
     g = {"id": "ID", "case": "CASE", "drinking water": "DW"}
     # whole-word matches replace; substrings inside larger words do not

@@ -120,6 +120,12 @@ command. (Advanced/non-sandboxed users who already have the key in their
 environment can instead set `OPENAI_API_KEY`, which `configure_openai()` honors
 first.)
 
+As defense-in-depth, `template` also adds best-effort `Read`-deny rules for the
+key file and config to `.claude/settings.json`. This only gates the `Read` tool
+(it does not stop a `bash cat`/`open()`, and a mid-session change may not apply
+until the next session), so it is a backstop, not a guarantee: the real
+protection is importing the key without reading the file and deleting it after.
+
 ### Step 4: Install the client library
 
 Run the shipped bootstrap once. It creates an isolated environment and installs
@@ -150,6 +156,30 @@ from https://ffmpeg.org (Windows). Translation does not need it.
 
 Once the key is stored and the library is installed, retry the operation. Never
 ask the user to paste the key again or to show it back.
+
+## Network access (reaching api.openai.com)
+
+The skill calls OpenAI over the network, and hosted runtimes (claude.ai / Cowork)
+restrict outbound network by default. If a run fails with a "could not reach
+OpenAI / network egress" error, the environment is blocking the connection, not
+the key. How to allow it depends on the plan:
+
+- **Free / Pro / Max:** the user enables it themselves in
+  **Settings > Capabilities > "Allow network egress"**.
+- **Team / Enterprise:** outbound network is admin-controlled and the default is
+  "package managers only" (PyPI/npm/GitHub), which does **not** reach third-party
+  APIs. A workspace **admin** must, under **Organization settings > Capabilities**,
+  either allowlist the specific domain(s) or enable "all domains". Allowlist:
+  - `api.openai.com` (required for cloud translation and transcription).
+  - `huggingface.co` and `*.hf.co` / `cdn-lfs.huggingface.co` only if using the
+    on-device models (their weights download once from Hugging Face; after that
+    they run offline). A fully air-gapped machine cannot download them and would
+    need the models pre-provisioned.
+
+Tell the user which of these applies and exactly what to enable; the cost gate
+and key are useless if the request can't leave the environment. `setup_env.py`
+installs `openai` from PyPI, which the "package managers only" default already
+allows, so install can succeed even when the API call later cannot reach OpenAI.
 
 ## Tracking spend
 
