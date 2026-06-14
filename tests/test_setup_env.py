@@ -55,6 +55,15 @@ def test_venv_dir_is_under_home() -> None:
     assert S.VENV_DIR == Path.home() / ".surveycto-skill" / "venv"
 
 
+def test_openai_dependency_is_pinned() -> None:
+    # guard against silently reverting to an unpinned `pip install openai`: this
+    # runs in a credential-bearing env, so the version must be fixed
+    import re  # noqa: PLC0415
+    assert S.OPENAI_REQUIREMENT == f"openai=={S.OPENAI_VERSION}"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", S.OPENAI_VERSION), S.OPENAI_VERSION
+    assert "==" in S.OPENAI_REQUIREMENT and S.OPENAI_REQUIREMENT.startswith("openai==")
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

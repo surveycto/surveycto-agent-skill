@@ -3,8 +3,8 @@
 Supports the audio-transcription workflow in
 ``references/audio-transcription.md``. SurveyCTO audio captures (audio-audit
 recordings, open-ended voice responses) are sensitive, so the content is sent
-straight to OpenAI by a script and the transcripts are written to a CSV; the
-agent orchestrates and reports without ingesting the audio.
+straight to OpenAI by a script and the transcripts written to a CSV; the agent
+orchestrates and reports without ingesting the audio.
 
 Model selection (the user picks; the cheapest is the default):
 
@@ -14,18 +14,18 @@ Model selection (the user picks; the cheapest is the default):
   A model id behind a menu name is also accepted; any other id is rejected,
   since the cost estimate needs a known per-minute rate.
 
-Long files are handled automatically: OpenAI limits a request to ~25 MB, and the
+Long files are chunked automatically: OpenAI limits a request to ~25 MB, and the
 gpt-4o-* models also cap audio by a token/context limit (~15 min of speech,
 content dependent), so files over either limit are split with ffmpeg into
-compliant chunks (with a small overlap so words at a cut are not dropped; the
-overlap's duplicated words are removed when the pieces are stitched). whisper-1
-has no duration cap, so a sub-25 MB long file goes in one request.
+compliant chunks. A small overlap keeps words at a cut from being dropped; its
+duplicated words are removed when the pieces are stitched. whisper-1 has no
+duration cap, so a sub-25 MB long file goes in one request.
 
 Auth: ``openai_auth.configure_openai()`` sets ``OPENAI_API_KEY`` for the SDK
-without ever printing the key. Cost gate: ``transcribe_files`` refuses to run
-unless ``confirm=True``; call ``estimate_cost`` and confirm first. Cache: with a
-``cache_path``, transcripts are memoized (keyed on file bytes + model) so re-runs
-are free. Sanitized errors: an API error never echoes audio content.
+without printing the key. Cost gate: ``transcribe_files`` refuses to run unless
+``confirm=True``; call ``estimate_cost`` and confirm first. Cache: with a
+``cache_path``, transcripts are memoized (keyed on file bytes + model + language)
+so re-runs are free. An API error never echoes audio content.
 
 Standard library only at import time; ``openai`` is imported lazily only when a
 call is made.
@@ -46,24 +46,32 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pricing
 import usage_ledger
 
 # Conservative request limits (under OpenAI's caps, verified live).
 _MAX_BYTES = 24 * 1024 * 1024          # OpenAI 25 MB request cap; use 24 for margin
 # The gpt-4o-* transcribe models reject overly long audio with an
-# "input_too_large" token-context error (not a clean duration cap; it depends on
+# "input_too_large" token-context error (not a clean duration cap; depends on
 # speech density). Live testing: ~15 min of moderate speech works, ~23 min fails.
-# Use a conservative initial window and rely on the adaptive recursive split
-# (_transcribe_segment) to handle denser audio that still hits the token limit.
+# Start with a conservative window and rely on the adaptive recursive split
+# (_transcribe_segment) for denser audio that still hits the token limit.
 _GPT4O_MAX_DURATION_SEC = 600          # 10 min initial window for gpt-4o-* models
 _MIN_SPLIT_SEC = 30.0                  # do not split a segment below this
 
-# Transcription model menu. usd_per_min are list rates (verify on the pricing
-# page); they drive the estimate only, not behavior.
+# Transcription model menu. Holds behaviour only (model id, billing basis,
+# chunking duration window); rates live in pricing.json (loaded via pricing.py)
+# so they can be refreshed without a code change. Billing basis confirmed against
+# the live API: gpt-4o-* return token usage (UsageTokens) and bill per token, so
+# post-run spend is computed from the response's real token counts; whisper-1
+# returns duration usage (UsageDuration) and bills per audio minute.
 _MODELS = {
-    "fast":     {"id": "gpt-4o-mini-transcribe", "usd_per_min": 0.003, "max_duration_sec": _GPT4O_MAX_DURATION_SEC},
-    "accurate": {"id": "gpt-4o-transcribe",      "usd_per_min": 0.006, "max_duration_sec": _GPT4O_MAX_DURATION_SEC},
-    "whisper":  {"id": "whisper-1",              "usd_per_min": 0.006, "max_duration_sec": None},
+    "fast":     {"id": "gpt-4o-mini-transcribe", "billing": "token",
+                 "max_duration_sec": _GPT4O_MAX_DURATION_SEC},
+    "accurate": {"id": "gpt-4o-transcribe", "billing": "token",
+                 "max_duration_sec": _GPT4O_MAX_DURATION_SEC},
+    "whisper":  {"id": "whisper-1", "billing": "minute",
+                 "max_duration_sec": None},
 }
 DEFAULT_MODEL = "fast"
 
@@ -82,8 +90,8 @@ def resolve_model(model: str | None) -> dict:
 
     :param model: A menu key (``fast``/``accurate``/``whisper``), a model id that
         matches a known menu entry, or ``None`` for the default. Fails closed on
-        any other id, since the cost estimate needs a known per-minute rate.
-    :returns: Dict with ``id``, ``usd_per_min``, ``max_duration_sec``.
+        any other id, since the cost estimate needs a known rate.
+    :returns: Dict with ``id``, ``billing``, ``max_duration_sec``.
     """
     if not model:
         return dict(_MODELS[DEFAULT_MODEL])
@@ -92,12 +100,12 @@ def resolve_model(model: str | None) -> dict:
     for spec in _MODELS.values():
         if spec["id"] == model:
             return dict(spec)
-    # fail closed: pricing drives the estimate/confirmation/ledger, so never guess
+    # fail closed: pricing drives the estimate, confirmation, and ledger
     known = ", ".join(sorted({s["id"] for s in _MODELS.values()}))
     raise ValueError(
         f"Unknown transcription model '{model}'. Use a menu name (fast, accurate, "
         f"whisper) or a supported model id ({known}). To use another model, add it "
-        "with its per-minute rate and limit to the model menu.")
+        "to the model menu and its rate to pricing.json.")
 
 
 _NO_EGRESS_MSG = (
@@ -111,16 +119,24 @@ _NO_EGRESS_MSG = (
 def _is_egress_error(exc: Exception) -> bool:
     """True iff ``exc`` is the OpenAI SDK's connection-failure type.
 
-    Deterministic: keyed to the SDK's documented exception contract, not message
-    text. ``openai.APIConnectionError`` is raised for any failure to reach the API;
-    ``APITimeoutError`` subclasses it, so one isinstance check covers a blocked
-    egress without misclassifying API/auth errors that did reach the server.
+    Keyed to the SDK's exception contract, not message text. ``APIConnectionError``
+    is raised for any failure to reach the API; ``APITimeoutError`` subclasses it,
+    so one isinstance check covers a blocked egress without misclassifying API/auth
+    errors that did reach the server.
     """
     try:
         from openai import APIConnectionError  # noqa: PLC0415
     except Exception:  # noqa: BLE001 - openai not importable -> cannot be this type
         return False
     return isinstance(exc, APIConnectionError)
+
+
+def _media_env() -> dict:
+    """Environment for ffmpeg/ffprobe with the OpenAI key removed. The media tools
+    never need it, and the CLI puts it in the process environment, so stripping it
+    keeps a binary planted earlier on PATH from reading it. PATH and the rest are
+    kept so ffmpeg still resolves its codecs/locale."""
+    return {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
 
 
 def _audio_duration_seconds(path: str) -> float | None:
@@ -131,7 +147,7 @@ def _audio_duration_seconds(path: str) -> float | None:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", "--", path],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, env=_media_env(),
         )
         value = out.stdout.strip()
         return float(value) if value else None
@@ -160,10 +176,19 @@ def estimate_cost(audio_paths: list[str], model: str | None = None) -> dict:
     :param model: Menu name or model id.
     :returns: Dict with ``known_seconds``, ``estimated_usd``, ``files``,
         ``unknown_duration`` (paths whose duration could not be read),
-        ``model``, and ``pii_warning``.
+        ``model``, ``rates_as_of``/``rates_source``/``pricing_source_url``
+        (how current the rates are), and ``pii_warning``.
+
+    Pre-run approximation from a per-minute figure; the gpt-4o-* models bill per
+    token, so actual post-run spend (from real token counts) can differ. whisper-1
+    bills per minute, so its estimate is close.
     """
     spec = resolve_model(model)
-    rate = spec["usd_per_min"]
+    price_data, prov = pricing.load()
+    rate = pricing.rate_for(price_data, "transcription", spec["id"])
+    # per-minute figure for the estimate: est_per_min for token-billed models,
+    # the actual per-minute rate for whisper-1
+    per_min = rate.get("est_per_min", rate.get("usd_per_min", 0.0))
     known = 0.0
     unknown: list[str] = []
     usd = 0.0
@@ -176,14 +201,18 @@ def estimate_cost(audio_paths: list[str], model: str | None = None) -> dict:
             unknown.append(p)
             continue
         known += dur
-        usd += _billed_minutes(dur) * rate
+        usd += _billed_minutes(dur) * per_min
     return {
         "known_seconds": round(known, 2),
         "estimated_usd": round(usd, 4),
         "estimated_usd_display": _usd_display(usd),
+        "estimate_basis": "approximate (per-minute); actual billed per token for gpt-4o-* models",
         "files": len(audio_paths),
         "unknown_duration": unknown,
         "model": spec["id"],
+        "rates_as_of": prov["last_verified"],
+        "rates_source": prov["source"],
+        "pricing_source_url": prov["source_url"],
         "pii_warning": _PII_WARNING,
     }
 
@@ -194,19 +223,19 @@ class TranscriptionError(RuntimeError):
     """A transcription failure whose message is safe to surface.
 
     Carries no source path, audio content, or model-response text, so it can be
-    reported to the user verbatim. Raised for known, actionable conditions
-    (missing ffmpeg, a segment still too large at the split floor). Genuinely
-    unexpected exceptions are reduced to their type name instead.
+    reported verbatim. Raised for known, actionable conditions (missing ffmpeg, a
+    segment still too large at the split floor). Unexpected exceptions are reduced
+    to their type name instead.
     """
 
 
 def _stitch(left: str, right: str, max_overlap_words: int = 8) -> str:
     """Join two adjacent transcript pieces, removing the words duplicated by the
-    ~1s chunk overlap (the overlap exists so no word is cut at a boundary, but it
-    makes ``left``'s tail repeat as ``right``'s head). Drop the longest such
-    repeat, matched case-insensitively and ignoring punctuation, within a bounded
-    window so a long coincidental similarity cannot be collapsed. A word genuinely
-    spoken twice exactly across the seam (a stutter) cannot be told apart without
+    ~1s chunk overlap (which exists so no word is cut at a boundary, but makes
+    ``left``'s tail repeat as ``right``'s head). Drop the longest such repeat,
+    matched case-insensitively and ignoring punctuation, within a bounded window so
+    a long coincidental similarity cannot be collapsed. A word genuinely spoken
+    twice across the seam (a stutter) is indistinguishable from overlap without
     per-word timestamps the models' plain-text output lacks, so it is treated as
     overlap; rare, chunked-audio-only, and called out in the quality reminder."""
     left, right = left.strip(), right.strip()
@@ -238,7 +267,7 @@ def _extract_chunk(src: str, start: float, length: float, dst: str) -> None:
             "(install it: 'brew install ffmpeg' or 'apt-get install ffmpeg').")
     cmd = ["ffmpeg", "-y", "-ss", f"{start}", "-t", f"{length}", "-i", src,
            "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "64k", dst]
-    subprocess.run(cmd, capture_output=True, timeout=600, check=True)
+    subprocess.run(cmd, capture_output=True, timeout=600, check=True, env=_media_env())
 
 
 def _is_too_large_error(exc: Exception) -> bool:
@@ -249,20 +278,64 @@ def _is_too_large_error(exc: Exception) -> bool:
       * token/context limit (gpt-4o-* on long audio): ``openai.BadRequestError``,
         HTTP 400, ``code == "input_too_large"``.
       * byte limit (request body over 25 MB): ``openai.APIStatusError``, HTTP 413.
-    We match on ``code`` and ``status_code`` (not message text), so detection is
-    deterministic and won't fire on unrelated 400s.
+    Matching ``code`` and ``status_code`` (not message text) keeps detection from
+    firing on unrelated 400s.
     """
     if getattr(exc, "code", None) == "input_too_large":
         return True
     return getattr(exc, "status_code", None) == 413
 
 
+def _blank_usage() -> dict:
+    """A zeroed usage accumulator. ``None`` distinguishes 'never reported' (caller
+    falls back to a per-minute estimate) from a genuine zero. ``calls`` and
+    ``with_tokens``/``with_seconds`` count how many API calls reported each kind of
+    usage, so the caller can detect an incomplete run (some paid calls missing
+    usage) and fall back rather than under-bill."""
+    return {"input_tokens": None, "output_tokens": None, "seconds": None,
+            "calls": 0, "with_tokens": 0, "with_seconds": 0}
+
+
+def _resp_usage(resp) -> dict:
+    """Billing usage from one transcription response, normalised to the accumulator
+    shape (``calls=1``). Confirmed against the live API: gpt-4o-* carry
+    ``usage.input_tokens``/``usage.output_tokens`` (token-billed); whisper-1 carries
+    ``usage.seconds`` (duration-billed). A response without usage still counts as a
+    call but reports nothing, marking the run incomplete so the caller estimates
+    instead of under-billing."""
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return {"input_tokens": None, "output_tokens": None, "seconds": None,
+                "calls": 1, "with_tokens": 0, "with_seconds": 0}
+    it = getattr(u, "input_tokens", None)
+    ot = getattr(u, "output_tokens", None)
+    sec = getattr(u, "seconds", None)
+    return {
+        "input_tokens": it, "output_tokens": ot, "seconds": sec,
+        "calls": 1,
+        "with_tokens": 1 if (it is not None or ot is not None) else 0,
+        "with_seconds": 1 if sec is not None else 0,
+    }
+
+
+def _add_usage(acc: dict, u: dict) -> dict:
+    """Fold one response's usage into the accumulator (sum across chunks/files)."""
+    for k in ("input_tokens", "output_tokens", "seconds"):
+        v = u.get(k)
+        if v is not None:
+            acc[k] = (acc[k] or 0) + v
+    for k in ("calls", "with_tokens", "with_seconds"):
+        acc[k] = acc.get(k, 0) + u.get(k, 0)
+    return acc
+
+
 def _transcribe_openai_file(path: str, model_id: str, client=None,
-                            language: str | None = None) -> str:
+                            language: str | None = None) -> tuple[str, dict]:
     """Transcribe one already-compliant file via the OpenAI audio API.
 
     ``language`` is an optional ISO-639-1 hint forwarded to the API to improve
-    accuracy/latency; when omitted the model auto-detects the spoken language.
+    accuracy/latency; omit to let the model auto-detect. Returns ``(text, usage)``
+    with ``usage`` the normalised billing usage (see :func:`_resp_usage`).
     """
     if client is None:
         from openai import OpenAI  # noqa: PLC0415
@@ -272,7 +345,7 @@ def _transcribe_openai_file(path: str, model_id: str, client=None,
         if language:
             kwargs["language"] = language
         resp = client.audio.transcriptions.create(**kwargs)
-    return getattr(resp, "text", "") or ""
+    return (getattr(resp, "text", "") or ""), _resp_usage(resp)
 
 
 def _fits_whole(path: str, spec: dict) -> bool:
@@ -290,20 +363,22 @@ def _fits_whole(path: str, spec: dict) -> bool:
 
 def _transcribe_segment(src: str, start: float, length: float, model_id: str,
                         client, depth: int = 0,
-                        language: str | None = None) -> tuple[str, float]:
+                        language: str | None = None) -> tuple[str, float, dict]:
     """Transcribe a [start, start+length] segment, splitting recursively if the
     model rejects it as too large (adapts to dense audio / token limits).
 
-    Returns ``(text, submitted_seconds)`` where ``submitted_seconds`` is the audio
-    duration actually sent to OpenAI (the sum across recursive splits, so it
-    includes the ~1s overlap re-sent at each seam). This is what gets billed.
+    Returns ``(text, submitted_seconds, usage)``. ``submitted_seconds`` is the
+    audio actually sent to OpenAI summed across recursive splits, so it includes
+    the ~1s overlap re-sent at each seam (the duration-billing basis). ``usage`` is
+    the summed billing usage across the splits (token-billing basis for gpt-4o-*).
     """
     with tempfile.TemporaryDirectory() as d:
         seg = os.path.join(d, "seg.mp3")
         _extract_chunk(src, start, length, seg)
         if os.path.getsize(seg) <= _MAX_BYTES:
             try:
-                return _transcribe_openai_file(seg, model_id, client, language), length
+                text, usage = _transcribe_openai_file(seg, model_id, client, language)
+                return text, length, usage
             except Exception as exc:
                 if not _is_too_large_error(exc):
                     raise
@@ -313,23 +388,26 @@ def _transcribe_segment(src: str, start: float, length: float, model_id: str,
                 "audio segment is too large to transcribe even after splitting")
     half = length / 2
     overlap = 1.0
-    lt, ls = _transcribe_segment(src, start, half, model_id, client, depth + 1, language)
-    rt, rs = _transcribe_segment(src, max(0.0, start + half - overlap),
-                                 length - half + overlap, model_id, client, depth + 1, language)
-    return _stitch(lt, rt), ls + rs
+    lt, ls, lu = _transcribe_segment(src, start, half, model_id, client, depth + 1, language)
+    rt, rs, ru = _transcribe_segment(src, max(0.0, start + half - overlap),
+                                     length - half + overlap, model_id, client, depth + 1, language)
+    usage = _add_usage(_add_usage(_blank_usage(), lu), ru)
+    return _stitch(lt, rt), ls + rs, usage
 
 
 def _transcribe_one(path: str, spec: dict, client, dur: float,
-                    language: str | None = None) -> tuple[str, float]:
+                    language: str | None = None) -> tuple[str, float, dict]:
     """Transcribe one file: single-request, or windowed + adaptive chunks.
 
-    ``dur`` is the file's measured duration (the caller requires it). Returns
-    ``(text, submitted_seconds)`` -- the total audio actually sent to OpenAI,
-    which for a chunked file exceeds ``dur`` by the per-seam overlap.
+    ``dur`` is the file's measured duration (caller-required). Returns
+    ``(text, submitted_seconds, usage)``: ``submitted_seconds`` is the total audio
+    sent to OpenAI (for a chunked file it exceeds ``dur`` by the per-seam overlap),
+    and ``usage`` is the summed billing usage across all requests.
     """
     if _fits_whole(path, spec):
         try:
-            return _transcribe_openai_file(path, spec["id"], client, language), dur
+            text, usage = _transcribe_openai_file(path, spec["id"], client, language)
+            return text, dur, usage
         except Exception as exc:
             if not _is_too_large_error(exc):
                 raise
@@ -343,21 +421,23 @@ def _transcribe_one(path: str, spec: dict, client, dur: float,
     window = max(60.0, window)
     parts: list[str] = []
     submitted = 0.0
+    usage = _blank_usage()
     overlap = 1.0
     start = 0.0
     while start < dur:
         s = start if not parts else max(0.0, start - overlap)
         length = min(window, dur - s)
-        ptext, psub = _transcribe_segment(path, s, length, spec["id"], client, language=language)
+        ptext, psub, pusage = _transcribe_segment(path, s, length, spec["id"], client, language=language)
         parts.append(ptext)
         submitted += psub
+        _add_usage(usage, pusage)
         start = s + length
         if length <= overlap:
             break
     stitched = ""
     for p in parts:
         stitched = _stitch(stitched, p)
-    return stitched, submitted
+    return stitched, submitted, usage
 
 
 # ---- cache ----------------------------------------------------------------
@@ -369,6 +449,30 @@ def _restrict_cache_permissions(cache_path: str) -> None:
         os.chmod(cache_path, 0o600)
     except OSError:
         pass
+
+
+def _write_csv_atomic(output_path: str, fieldnames: list[str], rows: list[dict]) -> None:
+    """Write a results CSV atomically and owner-only. Transcripts can contain
+    spoken PII, so the deliverable is created 0600 (mkstemp default) and only
+    os.replace()d into place after a complete write: an existing output is never
+    left truncated by a failed write, and the file is never briefly world-readable.
+    The temp file is in the output's own directory so the replace is atomic."""
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(out.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
+        os.replace(tmp, output_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _cache_connect(cache_path: str) -> sqlite3.Connection:
@@ -384,7 +488,7 @@ def _cache_connect(cache_path: str) -> sqlite3.Connection:
         )
         # migrate a pre-language cache: the language hint affects the transcript,
         # so an old table (keyed only by file+backend) must not serve a row for a
-        # different language. The cache is disposable, so just rebuild it.
+        # different language. The cache is disposable, so rebuild it.
         cols = [r[1] for r in conn.execute("PRAGMA table_info(transcripts)")]
         if "language" not in cols:
             conn.execute("DROP TABLE transcripts")
@@ -438,10 +542,64 @@ def transcribe_files(audio_paths: list[str], output_path: str,
         )
     spec = resolve_model(model)
     backend = spec["id"]
+    price_data, prov = pricing.load()
+    rate = pricing.rate_for(price_data, "transcription", backend)
+    billing = spec.get("billing", "minute")
     lang_key = language or "auto"  # cache key: the hint changes the transcript
     cache_conn = _cache_connect(cache_path) if cache_path else None
-    stats = {"transcribed": 0, "cached": 0, "failed": 0}
-    billed_seconds = 0.0  # audio actually sent to OpenAI this run
+    stats = {"transcribed": 0, "cached": 0, "failed": 0,
+             "backend": backend, "output_path": output_path,
+             "rates_as_of": prov["last_verified"], "rates_source": prov["source"]}
+    billed_seconds = 0.0  # audio sent to OpenAI this run (duration basis)
+    run_usage = _blank_usage()  # summed token/duration usage from responses
+    _spend_done = False
+
+    def _finalize_spend() -> None:
+        """Record this run's real spend exactly once. The user is charged per paid
+        API call, so this must run even if a later step (e.g. the output CSV write)
+        fails after those calls, not only on the happy path.
+
+        Billing basis follows the model's mode, both confirmed live: gpt-4o-* are
+        token-billed, whisper-1 is duration-billed. If any paid call did not report
+        the usage its billing mode needs (a mixed/incomplete run), fall back to the
+        per-minute estimate for the whole run rather than billing only the calls
+        that reported, which would under-report real spend."""
+        nonlocal _spend_done
+        if _spend_done:
+            return
+        _spend_done = True
+        if billed_seconds > 0:
+            calls = run_usage["calls"]
+            if billing == "token":
+                complete = calls > 0 and run_usage["with_tokens"] == calls
+                in_tok, out_tok = run_usage["input_tokens"], run_usage["output_tokens"]
+                if complete and (in_tok is not None or out_tok is not None):
+                    in_tok, out_tok = in_tok or 0, out_tok or 0
+                    actual_usd = (in_tok / 1e6 * rate["in_per_mtok"]
+                                  + out_tok / 1e6 * rate["out_per_mtok"])
+                    units = f"{in_tok + out_tok:,} tokens"
+                else:
+                    # no usage, or only some calls reported it: estimate the whole
+                    # run per-minute so spend is never under-booked
+                    actual_usd = _billed_minutes(billed_seconds) * rate.get("est_per_min", 0.0)
+                    units = f"~{billed_seconds / 60:.1f} audio-min (estimated)"
+            else:  # whisper-1: duration-billed; use the API's reported seconds only
+                # if every call reported them, else the locally-measured submitted
+                # duration (always complete by construction)
+                complete = calls > 0 and run_usage["with_seconds"] == calls
+                secs = run_usage["seconds"] if (complete and run_usage["seconds"] is not None) else billed_seconds
+                actual_usd = _billed_minutes(secs) * rate["usd_per_min"]
+                units = f"{secs / 60:.1f} audio-min"
+            spend = usage_ledger.record("transcribe", backend, units, actual_usd)
+        else:
+            s = usage_ledger.summary()
+            spend = {"run_usd": 0.0, "run_usd_display": "$0.00",
+                     "total_usd": s["total_usd"], "total_usd_display": s["total_usd_display"]}
+        stats["actual_usd"] = spend["run_usd"]
+        stats["actual_usd_display"] = spend["run_usd_display"]
+        stats["total_spend_usd"] = spend["total_usd"]
+        stats["total_spend_usd_display"] = spend["total_usd_display"]
+
     rows: list[dict] = []
     try:
         for path in audio_paths:
@@ -467,9 +625,9 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                     row["duration_seconds"] = _audio_duration_seconds(path)  # info only
                 else:
                     # Require a measurable duration BEFORE the paid call so its cost
-                    # can be reported accurately. Otherwise a file with unreadable
-                    # duration (no ffprobe) would still be sent and then booked as
-                    # $0.00, silently under-reporting spend.
+                    # can be reported. Otherwise a file with unreadable duration (no
+                    # ffprobe) would be sent and then booked as $0.00, under-reporting
+                    # spend.
                     dur = _audio_duration_seconds(path)
                     if dur is None:
                         raise TranscriptionError(
@@ -478,13 +636,13 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                             "transcription so the cost can be reported. Install ffmpeg "
                             "(it provides ffprobe) and retry.")
                     try:
-                        text, submitted = _transcribe_one(path, spec, client, dur, language)
+                        text, submitted, usage = _transcribe_one(path, spec, client, dur, language)
                     except TranscriptionError:
                         # message is safe by construction; surface as-is
                         raise
                     except Exception as exc:
-                        # a blocked network is common in locked-down environments;
-                        # give actionable egress guidance rather than an opaque name
+                        # blocked egress is common in locked-down environments; give
+                        # actionable guidance rather than an opaque name
                         if _is_egress_error(exc):
                             raise TranscriptionError(_NO_EGRESS_MSG) from None
                         # sanitize: an API/library error could echo request content
@@ -495,9 +653,12 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                     row["duration_seconds"] = dur
                     stats["transcribed"] += 1
                     fresh = True
-                    # bill on the audio actually submitted (includes chunk overlap),
-                    # not just the file duration
+                    # bill on what was submitted to OpenAI this run: token usage for
+                    # gpt-4o-*, duration for whisper-1. Keep both bases
+                    # (submitted_seconds includes the per-seam overlap) so the right
+                    # one is used per the model's billing mode below.
                     billed_seconds += submitted
+                    _add_usage(run_usage, usage)
                     if cache_conn is not None:
                         cache_conn.execute(
                             "INSERT OR REPLACE INTO transcripts VALUES (?,?,?,?)",
@@ -516,35 +677,17 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                 row["status"] = f"error: {type(exc).__name__}"
                 stats["failed"] += 1
             rows.append(row)
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=["file", "transcript", "backend",
-                                              "duration_seconds", "status"])
-            w.writeheader()
-            for r in rows:
-                w.writerow(r)
+        _write_csv_atomic(output_path, ["file", "transcript", "backend",
+                                        "duration_seconds", "status"], rows)
+    except BaseException:
+        # paid calls may already have incurred cost before a later failure (e.g. the
+        # output write); record that real spend before propagating
+        _finalize_spend()
+        raise
     finally:
         if cache_conn is not None:
             cache_conn.close()
-    stats["backend"] = backend
-    stats["output_path"] = output_path
-
-    # actual spend: bill on the audio actually submitted to OpenAI this run
-    # (cache hits are free and record nothing). billed_seconds is the sum of the
-    # durations actually sent, so for a chunked file it already includes the
-    # per-seam overlap -- it is the real submitted duration, not a lower bound.
-    if billed_seconds > 0:
-        actual_usd = _billed_minutes(billed_seconds) * spec["usd_per_min"]
-        units = f"{billed_seconds / 60:.1f} audio-min"
-        spend = usage_ledger.record("transcribe", spec["id"], units, actual_usd)
-    else:
-        s = usage_ledger.summary()
-        spend = {"run_usd": 0.0, "run_usd_display": "$0.00",
-                 "total_usd": s["total_usd"], "total_usd_display": s["total_usd_display"]}
-    stats["actual_usd"] = spend["run_usd"]
-    stats["actual_usd_display"] = spend["run_usd_display"]
-    stats["total_spend_usd"] = spend["total_usd"]
-    stats["total_spend_usd_display"] = spend["total_usd_display"]
+    _finalize_spend()
     return stats
 
 

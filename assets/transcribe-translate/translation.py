@@ -1,30 +1,29 @@
 """Translate columns of user data in a CSV via OpenAI chat models.
 
 Supports the user-data translation workflow in
-``references/user-data-translation.md``. Unlike form-label translation (which
-the agent does directly in conversation; see ``references/translation.md``),
-user data is high-volume and sensitive, so it is sent to OpenAI by a script and
-written to a file; the agent orchestrates and reports without ingesting the cells.
+``references/user-data-translation.md``. Unlike form-label translation (done by
+the agent directly in conversation; see ``references/translation.md``), user data
+is high-volume and sensitive, so it is sent to OpenAI by a script and written to a
+file; the agent orchestrates and reports without ingesting the cells.
 
 Model selection (the user picks; the cheapest is the default):
     "cheap"  -> gpt-4.1-nano  (DEFAULT)
     "better" -> gpt-4o-mini
-The model id behind a menu name (gpt-4.1-nano / gpt-4o-mini) is also accepted;
-any other id is rejected, since the cost estimate needs a known rate.
+The model id behind a menu name is also accepted; any other id is rejected, since
+the cost estimate needs a known rate.
 
 Design:
 * Cost gate: ``translate_csv`` refuses to run unless ``confirm=True``; call
-  ``estimate_cost`` and confirm with the user first.
-* Structured output: each batch is sent with a strict instruction to return a
-  JSON array of EXACTLY N translations for N inputs; the length is validated and
-  a mismatch is retried (up to the retry budget), then fails loud, so the model
-  can never silently drop or merge cells.
+  ``estimate_cost`` and confirm first.
+* Structured output: each batch is instructed to return a JSON array of EXACTLY N
+  translations for N inputs; the length is validated and a mismatch is retried (up
+  to the retry budget) then fails loud, so the model can never silently drop or
+  merge cells.
 * De-duplication: identical source strings are translated once per run.
-* Caching: with a ``cache_path``, raw translations are memoized so re-runs are
-  cheap. The row stores the translated text keyed by (source language, target
-  language, model, hash of the source text) -- the source text itself is not
-  stored, only its hash. The translations can still be sensitive, so the cache is
-  gitignored and chmod 600.
+* Caching: with a ``cache_path``, raw translations are memoized, keyed by (source
+  language, target language, model, hash of the source text). The source text
+  itself is not stored, only its hash. Translations can still be sensitive, so the
+  cache is gitignored and chmod 600.
 * Skip-list: empty cells, pure numbers, single letters, and common survey codes
   (N/A, 999, -99, ...) are never sent.
 * Preserve originals: a ``<column>_<target_language>`` column is added next to
@@ -45,16 +44,19 @@ import os
 import re
 import sqlite3
 import sys
+import tempfile
 import time
 from pathlib import Path
 
+import pricing
 import usage_ledger
 
-# Translation model menu. Token rates are list prices (verify on the pricing
-# page); they drive only the cost estimate.
+# Translation model menu. Holds the model id only; token rates live in
+# pricing.json (loaded via pricing.py) so they can be refreshed without a code
+# change.
 _MODELS = {
-    "cheap":  {"id": "gpt-4.1-nano", "in_per_mtok": 0.10, "out_per_mtok": 0.40},
-    "better": {"id": "gpt-4o-mini",  "in_per_mtok": 0.15, "out_per_mtok": 0.60},
+    "cheap":  {"id": "gpt-4.1-nano"},
+    "better": {"id": "gpt-4o-mini"},
 }
 DEFAULT_MODEL = "cheap"
 
@@ -82,19 +84,19 @@ _NON_RETRYABLE_NAMES = frozenset({
 class _LengthMismatch(RuntimeError):
     """The model returned the wrong number of translations for a batch.
 
-    Subclasses RuntimeError (not ValueError) so it is retryable: a malformed
-    count is usually a transient formatting slip the model corrects on retry.
-    After the retry budget is exhausted it fails loud, never silently truncating.
+    Subclasses RuntimeError (not ValueError) so it is retryable: a wrong count is
+    usually a transient formatting slip the model corrects on retry. After the
+    retry budget is exhausted it fails loud, never silently truncating.
     """
 
 
 def resolve_model(model: str | None) -> dict:
     """Resolve a menu name or supported model id to a spec dict.
 
-    Fails closed on unknown model ids: pricing drives the cost estimate, the
-    confirmation, and the spend ledger, so we never guess a rate. A menu name or a
-    model id that matches a known menu entry resolves to that entry's exact rates;
-    anything else raises with an actionable message.
+    Fails closed on unknown model ids: pricing drives the cost estimate,
+    confirmation, and spend ledger, so a rate is never guessed. A menu name or a
+    matching model id resolves to that entry; anything else raises with an
+    actionable message.
     """
     if not model:
         return dict(_MODELS[DEFAULT_MODEL])
@@ -106,8 +108,8 @@ def resolve_model(model: str | None) -> dict:
     known = ", ".join(sorted({s["id"] for s in _MODELS.values()}))
     raise ValueError(
         f"Unknown translation model '{model}'. Use a menu name (cheap, better) or a "
-        f"supported model id ({known}). To use another model, add it with its "
-        "pricing to the model menu so the cost estimate stays accurate.")
+        f"supported model id ({known}). To use another model, add it to the model "
+        "menu and its rate to pricing.json so the cost estimate stays accurate.")
 
 
 def _should_skip(value: str) -> bool:
@@ -125,7 +127,8 @@ def _should_skip(value: str) -> bool:
 
 def _read_csv(csv_path: str) -> tuple[list[str], list[dict]]:
     """Read a CSV into (fieldnames, rows). UTF-8/BOM tolerant; rejects duplicate
-    headers; drops the None overflow key from ragged rows."""
+    headers; rejects ragged rows (more fields than headers) instead of dropping the
+    overflow, so malformed input is never silently truncated."""
     with open(csv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         fieldnames = list(reader.fieldnames or [])
@@ -133,10 +136,13 @@ def _read_csv(csv_path: str) -> tuple[list[str], list[dict]]:
         if dupes:
             raise ValueError(f"CSV has duplicate column names: {sorted(dupes)}.")
         rows = []
-        for r in reader:
-            row = dict(r)
-            row.pop(None, None)
-            rows.append(row)
+        for n, r in enumerate(reader, start=2):  # row 1 is the header
+            if None in r:
+                extra = len(r[None]) if isinstance(r.get(None), list) else 1
+                raise ValueError(
+                    f"CSV row {n} has {extra} more field(s) than the {len(fieldnames)} "
+                    "header columns. Fix the row (likely an unquoted comma) and retry.")
+            rows.append(dict(r))
     return fieldnames, rows
 
 
@@ -159,12 +165,16 @@ def estimate_cost(csv_path: str, columns: list[str], target_language: str,
                   model: str | None = None) -> dict:
     """Estimate translation cost (token-based, approximate).
 
-    OpenAI bills per token, so this is a rough estimate from character counts
-    (~4 chars/token, input and output). De-duplication is not modeled, so the
-    real cost is usually lower. Returns ``billable_chars``, ``cells_to_translate``,
-    ``estimated_usd``, ``model``, ``target_language``, ``pii_warning``.
+    Rough estimate from character counts (~4 chars/token, input and output).
+    De-duplication is not modeled, so the real cost is usually lower; actual
+    post-run spend is computed from the response's real token counts. Returns
+    ``billable_chars``, ``cells_to_translate``, ``estimated_usd``, ``model``,
+    ``target_language``, ``rates_as_of``/``rates_source``/``pricing_source_url``,
+    ``pii_warning``.
     """
     spec = resolve_model(model)
+    price_data, prov = pricing.load()
+    rate = pricing.rate_for(price_data, "translation", spec["id"])
     fieldnames, rows = _read_csv(csv_path)
     columns = list(dict.fromkeys(columns))  # dedup, like translate_csv, for a consistent estimate
     _require_columns(fieldnames, columns)
@@ -181,7 +191,7 @@ def estimate_cost(csv_path: str, columns: list[str], target_language: str,
             cells += 1
     tok_in = billable / 4 + cells * 12   # rough: text + per-item overhead
     tok_out = billable / 4               # translation ~ similar length
-    usd = tok_in / 1e6 * spec["in_per_mtok"] + tok_out / 1e6 * spec["out_per_mtok"]
+    usd = tok_in / 1e6 * rate["in_per_mtok"] + tok_out / 1e6 * rate["out_per_mtok"]
     return {
         "billable_chars": billable,
         "cells_to_translate": cells,
@@ -190,6 +200,9 @@ def estimate_cost(csv_path: str, columns: list[str], target_language: str,
         "estimated_usd_display": _usd_display(usd),
         "model": spec["id"],
         "target_language": target_language,
+        "rates_as_of": prov["last_verified"],
+        "rates_source": prov["source"],
+        "pricing_source_url": prov["source_url"],
         "pii_warning": _PII_WARNING,
         "note": "Token-based estimate; de-duplication usually makes the real cost lower.",
     }
@@ -217,10 +230,10 @@ def apply_glossary(text: str, glossary: dict) -> str:
     """Case-insensitive, whole-word replacement, longest terms first.
 
     Matches are bounded by Unicode word characters, so a term never replaces a
-    substring inside a larger word (e.g. ``id`` will not touch ``idea`` or
-    ``paid``; ``case`` will not touch ``caseload``). Multi-word terms match as
-    written. Matching is whole-word, not morphological, so it does not handle
-    inflected forms; curate the glossary accordingly.
+    substring inside a larger word (``id`` will not touch ``idea`` or ``paid``;
+    ``case`` will not touch ``caseload``). Multi-word terms match as written.
+    Matching is whole-word, not morphological, so it does not handle inflected
+    forms; curate the glossary accordingly.
     """
     if not glossary:
         return text
@@ -230,7 +243,7 @@ def apply_glossary(text: str, glossary: dict) -> str:
             continue
         target = glossary[source]
         # (?<!\w)/(?!\w) keep the term from matching inside a larger word; \w is
-        # Unicode-aware for str patterns. The lambda avoids re.sub treating
+        # Unicode-aware for str patterns. The lambda keeps re.sub from treating
         # backslashes or group refs in the replacement text specially.
         pattern = re.compile(r"(?<!\w)" + re.escape(source) + r"(?!\w)", re.IGNORECASE)
         result = pattern.sub(lambda _m, t=target: t, result)
@@ -242,13 +255,37 @@ def _text_hash(text: str) -> str:
 
 
 def _restrict_cache_permissions(cache_path: str) -> None:
-    """Make the cache readable only by its owner. It holds the translated text
-    (keyed by a hash of the source, not the source itself), which can still be
-    sensitive, so it gets the same 0600 treatment as the API-key config."""
+    """Make the cache readable only by its owner. It holds translated text (keyed
+    by a hash of the source, not the source itself), which can still be sensitive,
+    so it gets the same 0600 treatment as the API-key config."""
     try:
         os.chmod(cache_path, 0o600)
     except OSError:
         pass
+
+
+def _write_csv_atomic(output_path: str, fieldnames: list[str], rows: list[dict]) -> None:
+    """Write the result CSV atomically and owner-only. Translated responses can
+    contain PII, so the deliverable is created 0600 (mkstemp default) and only
+    os.replace()d into place after a complete write: an existing output is never
+    left truncated by a failed write, and the file is never briefly world-readable.
+    The temp file is in the output's own directory so the replace is atomic."""
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(out.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
+        os.replace(tmp, output_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _cache_connect(cache_path: str) -> sqlite3.Connection:
@@ -295,11 +332,11 @@ _NO_EGRESS_MSG = (
 def _is_egress_error(exc: Exception) -> bool:
     """True iff ``exc`` is the OpenAI SDK's connection-failure type.
 
-    Deterministic: keyed to the SDK's documented exception contract, not message
-    text. ``openai.APIConnectionError`` is raised for any failure to reach the API
-    (DNS, refused, unreachable); ``APITimeoutError`` subclasses it, so one
-    isinstance check covers "couldn't connect" (a blocked egress) without
-    misclassifying API/auth errors that did reach the server.
+    Keyed to the SDK's exception contract, not message text.
+    ``openai.APIConnectionError`` is raised for any failure to reach the API (DNS,
+    refused, unreachable); ``APITimeoutError`` subclasses it, so one isinstance
+    check covers a blocked egress without misclassifying API/auth errors that did
+    reach the server.
     """
     try:
         from openai import APIConnectionError  # noqa: PLC0415
@@ -311,7 +348,7 @@ def _is_egress_error(exc: Exception) -> bool:
 def _usage_tokens(resp) -> tuple[int, int] | None:
     """(prompt_tokens, completion_tokens) from a chat response, or None if absent.
 
-    Real OpenAI responses carry ``usage``; this lets the caller bill on actual
+    Real OpenAI responses carry ``usage``, letting the caller bill on actual
     tokens. A response without it (e.g. a test stub) yields None so the caller
     falls back to a character-based estimate.
     """
@@ -333,7 +370,7 @@ def _translate_batch(client, texts: list[str], target_language: str,
     Returns ``(translations, usage)`` where ``usage`` is ``(prompt_tokens,
     completion_tokens)`` or None when the response carries no usage. Raises a
     sanitized RuntimeError on persistent failure or if the model will not return
-    exactly len(texts) translations (never silently truncates).
+    exactly len(texts) translations; never silently truncates.
     """
     src = f" The source language is {source_language}." if source_language else ""
     system = (
@@ -364,7 +401,13 @@ def _translate_batch(client, texts: list[str], target_language: str,
                 raise _LengthMismatch(
                     f"model returned {0 if not isinstance(out, list) else len(out)} "
                     f"translations for {len(texts)} inputs")
-            return [str(x) for x in out], _usage_tokens(resp)
+            if not all(isinstance(x, str) for x in out):
+                # a non-string item (null, number, object) is a malformed response;
+                # coercing it with str() would cache and write "None"/"{...}" as a
+                # translation. Treat it as retryable so the model can correct it.
+                raise _LengthMismatch(
+                    "model returned a non-string translation item")
+            return out, _usage_tokens(resp)
         except Exception as exc:
             attempt += 1
             if attempt > max_retries or not _is_retryable(exc):
@@ -383,8 +426,8 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
                   max_retries: int = _MAX_RETRIES) -> dict:
     """Translate ``columns`` in a CSV and write the result to ``output_path``.
 
-    Adds a ``<column>_<target_language>`` column next to each source column;
-    never overwrites. Skips skip-list cells. Caches raw translations (keyed on
+    Adds a ``<column>_<target_language>`` column next to each source column; never
+    overwrites. Skips skip-list cells. Caches raw translations (keyed on
     source/target language + model + text hash); the glossary is applied as a
     re-runnable overlay on every resolution.
 
@@ -396,6 +439,8 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
             "user the cost and PII warning, and only proceed after confirmation.")
     spec = resolve_model(model)
     model_id = spec["id"]
+    price_data, prov = pricing.load()
+    rate = pricing.rate_for(price_data, "translation", model_id)
     fieldnames, rows = _read_csv(csv_path)
     columns = list(dict.fromkeys(columns))
     _require_columns(fieldnames, columns)
@@ -420,30 +465,35 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
 
     cache_conn = _cache_connect(cache_path) if cache_path else None
     lang_key = source_language or "auto"
-    stats = {"cells_translated": 0, "cells_cached": 0, "cells_skipped": 0, "chars_sent": 0}
+    stats = {"cells_translated": 0, "cells_cached": 0, "cells_skipped": 0,
+             "chars_sent": 0, "unique_sent": 0}
     tok_in_total = 0
     tok_out_total = 0
     have_usage = True
     _spend_done = False
 
     def _finalize_spend() -> None:
-        """Record spend for whatever was actually billed, exactly once. The user
-        is charged per successful batch, so this must run before re-raising a
-        mid-run failure too, not only on the happy path."""
+        """Record spend for whatever was billed, exactly once. The user is charged
+        per successful batch, so this must run before re-raising a mid-run failure
+        too, not only on the happy path."""
         nonlocal _spend_done
         if _spend_done:
             return
         _spend_done = True
         if stats["cells_translated"] > 0:
             if have_usage and (tok_in_total or tok_out_total):
-                actual_usd = (tok_in_total / 1e6 * spec["in_per_mtok"]
-                              + tok_out_total / 1e6 * spec["out_per_mtok"])
+                actual_usd = (tok_in_total / 1e6 * rate["in_per_mtok"]
+                              + tok_out_total / 1e6 * rate["out_per_mtok"])
                 units = f"{tok_in_total + tok_out_total:,} tokens"
             else:
+                # only unique strings are sent (duplicates resolve to the same
+                # translation), so the per-item overhead is counted per unique
+                # input, not per output cell. Otherwise duplicate text would be
+                # charged as if sent multiple times.
                 chars = stats["chars_sent"]
-                tok_in = chars / 4 + stats["cells_translated"] * 12
-                actual_usd = (tok_in / 1e6 * spec["in_per_mtok"]
-                              + chars / 4 / 1e6 * spec["out_per_mtok"])
+                tok_in = chars / 4 + stats["unique_sent"] * 12
+                actual_usd = (tok_in / 1e6 * rate["in_per_mtok"]
+                              + chars / 4 / 1e6 * rate["out_per_mtok"])
                 units = f"~{chars:,} chars (estimated)"
             spend = usage_ledger.record("translate", model_id, units, actual_usd)
         else:
@@ -498,6 +548,7 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
             for text, raw in zip(chunk, results):
                 stats["cells_translated"] += len(to_translate[text])
                 stats["chars_sent"] += len(text)
+                stats["unique_sent"] += 1  # one API item per unique source string
                 done = finish(raw)
                 for (i, oc) in to_translate[text]:
                     resolved[(i, oc)] = done
@@ -508,19 +559,17 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
             if cache_conn is not None:
                 cache_conn.commit()
 
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=out_fieldnames)
-            w.writeheader()
-            for i, row in enumerate(rows):
-                out_row = dict(row)
-                for col in columns:
-                    oc = out_columns[col]
-                    out_row[oc] = resolved.get((i, oc), "")
-                w.writerow(out_row)
+        out_rows = []
+        for i, row in enumerate(rows):
+            out_row = dict(row)
+            for col in columns:
+                oc = out_columns[col]
+                out_row[oc] = resolved.get((i, oc), "")
+            out_rows.append(out_row)
+        _write_csv_atomic(output_path, out_fieldnames, out_rows)
     except BaseException:
         # a later batch (or the output write) failed after earlier paid batches
-        # already incurred OpenAI cost; record that real spend before propagating
+        # already incurred cost; record that real spend before propagating
         _finalize_spend()
         raise
     finally:
@@ -528,8 +577,22 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
             cache_conn.close()
     stats["model"] = model_id
     stats["output_path"] = output_path
+    stats["rates_as_of"] = prov["last_verified"]
+    stats["rates_source"] = prov["source"]
     _finalize_spend()
     return stats
+
+
+def _parse_columns(raw: str) -> list[str]:
+    """Split a --columns value on commas, trimming surrounding whitespace so
+    ``note, comment`` yields ``['note', 'comment']`` not ``['note', ' comment']``
+    (the latter would not match the header). Rejects empty names (a stray or
+    trailing comma)."""
+    names = [c.strip() for c in raw.split(",")]
+    if any(not c for c in names):
+        raise ValueError(
+            "Empty column name in --columns (check for a stray or trailing comma).")
+    return names
 
 
 def _main(argv: list[str]) -> int:
@@ -560,7 +623,7 @@ def _main(argv: list[str]) -> int:
     pt.add_argument("--confirm", action="store_true", help="required: confirms you accepted the cost/PII")
     args = p.parse_args(argv)
     if args.cmd == "estimate":
-        print(json.dumps(estimate_cost(args.csv_path, args.columns.split(","),
+        print(json.dumps(estimate_cost(args.csv_path, _parse_columns(args.columns),
                                        args.target, args.model), indent=2))
         return 0
     if args.cmd == "translate":
@@ -571,7 +634,7 @@ def _main(argv: list[str]) -> int:
         import openai_auth
         openai_auth.configure_openai()
         print(json.dumps(translate_csv(
-            args.csv_path, args.columns.split(","), args.target, args.source,
+            args.csv_path, _parse_columns(args.columns), args.target, args.source,
             args.output, model=args.model, glossary_path=args.glossary,
             cache_path=args.cache, confirm=True), indent=2))
         return 0

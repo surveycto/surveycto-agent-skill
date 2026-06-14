@@ -21,6 +21,7 @@ Read the reference primers for the agent-facing workflow:
 | `transcription.py` | estimate_cost, transcribe_files (selectable model, automatic chunking, cache). | standard library only |
 | `setup_env.py` | One-time bootstrap: create the isolated venv and install `openai`. | standard library only |
 | `usage_ledger.py` | Record actual OpenAI spend per run and a cumulative total at `~/.surveycto-skill/spend-ledger.json`; `show`/`reset` CLI. | standard library only |
+| `pricing.py` / `pricing.json` | The OpenAI rate table (per-token / per-minute), kept as dated data not code. `show` prints rates + how current they are; `set-transcription`/`set-translation` refresh a rate. | standard library only |
 
 `openai` is imported lazily, only when a call reaches the API, so the modules
 import and their logic is unit-testable offline.
@@ -51,6 +52,25 @@ long files). Install it with `brew install ffmpeg` (macOS),
 
 - Translation: `--model cheap` (gpt-4.1-nano, default) or `better` (gpt-4o-mini), or a model id.
 - Transcription: `--model fast` (gpt-4o-mini-transcribe, default), `accurate` (gpt-4o-transcribe), or `whisper` (whisper-1).
+
+## Pricing (dated data, optionally refreshed in-flight)
+
+OpenAI has no pricing API, so the rates that turn usage into dollars live in
+`pricing.json` with the date they were last verified. `estimate` and `transcribe`/
+`translate` report `rates_as_of` and `rates_source` so the user always knows how
+current the figures are. At the start of a run the agent should offer to check
+current prices online (so the estimate is accurate); if the user declines, the
+stored rates are used. Refresh after reading the pricing page:
+
+```bash
+"$PY" assets/transcribe-translate/pricing.py show
+"$PY" assets/transcribe-translate/pricing.py set-transcription gpt-4o-transcribe \
+    --in-per-mtok 2.50 --out-per-mtok 10.00 --est-per-min 0.006 --as-of 2026-06-14
+```
+
+Estimates are approximate (transcription uses a per-minute figure); the actual
+spend reported after a run is computed from the response's real usage: token
+counts for the gpt-4o-* models, audio duration for whisper-1.
 
 ## Quick use (CLI)
 
@@ -96,6 +116,7 @@ python3 tests/test_translation.py
 python3 tests/test_transcription.py
 python3 tests/test_setup_env.py
 python3 tests/test_usage_ledger.py
+python3 tests/test_pricing.py
 ```
 
 They use injected fake clients, so they exercise the surrounding logic

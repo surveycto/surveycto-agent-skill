@@ -30,30 +30,42 @@ _UL.LEDGER_PATH = _UL.LEDGER_DIR / "spend-ledger.json"
 
 
 class BadRequestError(Exception):
-    """Mirrors the real openai.BadRequestError for the token-limit case: a 400 with
-    structured code='input_too_large' (the fields _is_too_large_error keys off,
-    confirmed against the live API)."""
+    """Mirrors openai.BadRequestError for the token-limit case: a 400 with
+    code='input_too_large' (the fields _is_too_large_error keys off, confirmed
+    against the live API)."""
     def __init__(self, message="", code="input_too_large", status_code=400):
         super().__init__(message)
         self.code = code
         self.status_code = status_code
 
 
+class _Usage:
+    """Mirror the live billing-usage objects: gpt-4o-* return input/output token
+    counts (UsageTokens), whisper-1 returns seconds (UsageDuration). Only the
+    attributes a real response carries are set, so getattr misses read as None,
+    matching _resp_usage's contract."""
+    def __init__(self, input_tokens=None, output_tokens=None, seconds=None):
+        if input_tokens is not None: self.input_tokens = input_tokens
+        if output_tokens is not None: self.output_tokens = output_tokens
+        if seconds is not None: self.seconds = seconds
 class _Resp:
-    def __init__(self, text): self.text = text
+    def __init__(self, text, usage=None): self.text = text; self.usage = usage
 class _Transcriptions:
-    def __init__(self, handler): self._h = handler; self.calls = []; self.languages = []
+    def __init__(self, handler, usage_handler=None):
+        self._h = handler; self._uh = usage_handler
+        self.calls = []; self.languages = []
     def create(self, model, file, language=None):
         data = file.read()
         self.calls.append(len(data))
         self.languages.append(language)
-        return _Resp(self._h(data))
+        usage = self._uh(data) if self._uh else None
+        return _Resp(self._h(data), usage)
 class _Audio:
     def __init__(self, tr): self.transcriptions = tr
 class FakeClient:
-    def __init__(self, handler=None):
+    def __init__(self, handler=None, usage_handler=None):
         handler = handler or (lambda data: "hello world transcript")
-        self.transcriptions = _Transcriptions(handler)
+        self.transcriptions = _Transcriptions(handler, usage_handler)
         self.audio = _Audio(self.transcriptions)
 
 
@@ -68,10 +80,12 @@ def test_resolve_model() -> None:
     assert X.resolve_model("whisper")["id"] == "whisper-1"
     assert X.resolve_model("whisper")["max_duration_sec"] is None
     assert X.resolve_model("accurate")["max_duration_sec"] == X._GPT4O_MAX_DURATION_SEC
-    # a model id behind a menu name resolves to that entry's exact rate
-    explicit = X.resolve_model("gpt-4o-transcribe")
-    assert explicit["id"] == "gpt-4o-transcribe" and explicit["usd_per_min"] == 0.006
-    assert X.resolve_model("gpt-4o-mini-transcribe")["usd_per_min"] == 0.003  # not the 0.006 default
+    # billing basis travels with the menu entry; rates live in pricing.json
+    assert X.resolve_model("fast")["billing"] == "token"
+    assert X.resolve_model("whisper")["billing"] == "minute"
+    # a model id behind a menu name resolves to that entry
+    assert X.resolve_model("gpt-4o-transcribe")["id"] == "gpt-4o-transcribe"
+    assert X.resolve_model("gpt-4o-mini-transcribe")["id"] == "gpt-4o-mini-transcribe"
     # an unknown id fails closed (pricing would be a guess)
     try:
         X.resolve_model("whisper-large-v3")
@@ -238,13 +252,18 @@ def test_adaptive_split_succeeds_on_too_large() -> None:
         return f"<{len(data)}>"
     try:
         c = FakeClient(handler)
-        text, submitted = X._transcribe_segment("src", 0.0, 100.0, "gpt-4o-mini-transcribe", c)
+        text, submitted, usage = X._transcribe_segment("src", 0.0, 100.0, "gpt-4o-mini-transcribe", c)
         # larger calls were the failed attempts that triggered splitting; the
-        # leaves that actually produced text are within the limit
+        # leaves that produced text are within the limit
         assert text and ("<25>" in text or "<26>" in text), text
         assert any(n <= THRESH for n in c.transcriptions.calls), c.transcriptions.calls
         # submitted seconds include the overlap re-sent at each seam -> > 100
         assert submitted > 100.0, submitted
+        # this fake returns no usage object, so no tokens/seconds were reported,
+        # though the calls were still counted (marking the run incomplete)
+        assert usage["input_tokens"] is None and usage["output_tokens"] is None
+        assert usage["seconds"] is None and usage["with_tokens"] == 0
+        assert usage["calls"] >= 1, usage
     finally:
         X._extract_chunk = orig_ex
 
@@ -471,6 +490,138 @@ def test_chunked_billing_includes_overlap() -> None:
             assert s["actual_usd"] < file_only * 1.05, s  # but only slightly (a few seams)
     finally:
         X._audio_duration_seconds = orig_d; X.os.path.getsize = orig_g; X._extract_chunk = orig_ex
+
+
+def test_token_billing_uses_response_tokens() -> None:
+    # gpt-4o-* are token-billed: when the response carries token usage, spend must
+    # be computed from real counts, not the per-minute estimate
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 120.0  # 2 min; est path would be $0.006
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            # accurate = gpt-4o-transcribe: $2.50/1M in, $10.00/1M out
+            c = FakeClient(usage_handler=lambda data: _Usage(input_tokens=1_000_000, output_tokens=200_000))
+            s = X.transcribe_files([str(a)], str(out), model="accurate", confirm=True, client=c)
+            expected = 1_000_000 / 1e6 * 2.50 + 200_000 / 1e6 * 10.00  # = $4.50
+            assert abs(s["actual_usd"] - expected) < 1e-6, s
+            assert s["actual_usd_display"] == "$4.50", s
+            assert s["rates_source"] in ("file", "builtin") and s["rates_as_of"], s
+    finally:
+        X._audio_duration_seconds = orig
+
+
+def test_whisper_billed_on_reported_seconds() -> None:
+    # whisper-1 is duration-billed and reports usage.seconds; bill on that, not on
+    # the locally measured/submitted duration
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 120.0  # 2 min measured...
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            # ...but the API reports 60s of billed audio
+            c = FakeClient(usage_handler=lambda data: _Usage(seconds=60.0))
+            s = X.transcribe_files([str(a)], str(out), model="whisper", confirm=True, client=c)
+            assert abs(s["actual_usd"] - (1.0 * 0.006)) < 1e-6, s  # 60s -> 1 min * $0.006
+    finally:
+        X._audio_duration_seconds = orig
+
+
+def test_token_billing_falls_back_to_estimate_without_usage() -> None:
+    # a token-billed model whose response has no usage (older API / stub) must
+    # still book spend via the per-minute estimate, never silently $0
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 120.0
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            s = X.transcribe_files([str(a)], str(out), model="accurate", confirm=True,
+                                   client=FakeClient())  # no usage_handler
+            assert abs(s["actual_usd"] - (2.0 * 0.006)) < 1e-6, s  # est_per_min path
+    finally:
+        X._audio_duration_seconds = orig
+
+
+def test_mixed_usage_falls_back_to_estimate() -> None:
+    # a chunked token-billed run where only some calls report usage must NOT bill
+    # just the reported tokens (that under-reports); it falls back to the
+    # per-minute estimate for the whole run
+    orig_d = X._audio_duration_seconds; orig_g = X.os.path.getsize; orig_ex = X._extract_chunk
+    X._audio_duration_seconds = lambda p: 1800.0          # 30 min -> several chunks
+    X.os.path.getsize = lambda p: 5_000_000
+    X._extract_chunk = lambda src, start, length, dst: open(dst, "wb").write(b"x" * 100)
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            state = {"n": 0}
+            def uh(data):
+                state["n"] += 1
+                return _Usage(input_tokens=100, output_tokens=20) if state["n"] == 1 else None
+            s = X.transcribe_files([str(a)], str(out), model="accurate", confirm=True,
+                                   client=FakeClient(usage_handler=uh))
+            assert state["n"] >= 3, state  # really was a multi-chunk run
+            # estimate path: ~30 min * $0.006 ~ $0.18, dwarfing the 120 reported tokens
+            assert s["actual_usd"] > 0.1, s
+            assert abs(s["actual_usd"] - X._billed_minutes(1800.0 * 1.0) * 0.006) < 0.05, s
+    finally:
+        X._audio_duration_seconds = orig_d; X.os.path.getsize = orig_g; X._extract_chunk = orig_ex
+
+
+def test_spend_recorded_even_if_output_write_fails() -> None:
+    # paid calls already cost money; a failing output write must not drop the ledger
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 120.0
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x")
+            out_dir = Path(d) / "is_a_dir"; out_dir.mkdir()  # open(dir,"w") fails
+            before = X.usage_ledger.summary()["total_usd"]
+            raised = False
+            try:
+                X.transcribe_files([str(a)], str(out_dir), confirm=True, client=FakeClient())
+            except Exception:
+                raised = True
+            assert raised, "expected the output write to fail"
+            after = X.usage_ledger.summary()["total_usd"]
+            assert after > before, (before, after)  # spend still recorded
+    finally:
+        X._audio_duration_seconds = orig
+
+
+def test_output_csv_is_chmod_600() -> None:
+    import stat
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 30.0
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            X.transcribe_files([str(a)], str(out), confirm=True, client=FakeClient())
+            mode = stat.S_IMODE(out.stat().st_mode)
+            assert mode == 0o600, oct(mode)
+    finally:
+        X._audio_duration_seconds = orig
+
+
+def test_media_env_strips_openai_key() -> None:
+    # ffmpeg/ffprobe must not inherit the API key (a planted binary on PATH could
+    # read it); they still get the rest of the environment (PATH etc.)
+    import os
+    orig = os.environ.get("OPENAI_API_KEY")
+    os.environ["OPENAI_API_KEY"] = "sk-secret-should-not-leak"
+    try:
+        env = X._media_env()
+        assert "OPENAI_API_KEY" not in env, "key leaked into media subprocess env"
+        assert env.get("PATH") == os.environ.get("PATH")  # rest of env preserved
+    finally:
+        if orig is None:
+            os.environ.pop("OPENAI_API_KEY", None)
+        else:
+            os.environ["OPENAI_API_KEY"] = orig
 
 
 def main() -> int:

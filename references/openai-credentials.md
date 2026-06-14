@@ -200,8 +200,15 @@ python3 assets/transcribe-translate/usage_ledger.py reset    # clears the histor
 - [ ] Calls `openai_auth.configure_openai()`; never reads or prints the key value.
 - [ ] Onboards the key via the file handoff (`template` then `import-file`), never
       via chat-paste or a terminal `export`; never opens/`cat`s the key file or
-      config (the skill `.gitignore` covers `openai-key.txt` and the config).
+      config. `import-file` deletes the temporary `openai-key.txt` after importing,
+      and the stored config lives outside any repo at
+      `~/.surveycto-skill/openai-config.json` (chmod 600), so it is never in
+      version control by virtue of its location. The `.gitignore` shipped in this
+      skill's source repo does not travel with the packaged skill, so do not rely
+      on it in the user's own workspace; if `openai-key.txt` lingers there, ensure
+      that project ignores it (or delete it).
 - [ ] Never writes the key into output CSVs, logs, a committed config, or chat.
 - [ ] Treats any cache file (it contains source text or transcripts) as
-      sensitive and keeps it out of version control (the skill `.gitignore`
-      covers the default cache names).
+      sensitive: it is created chmod 0600, but place it (and output CSVs) outside
+      version-controlled folders, or add them to the user project's ignore list.
+      The skill repo's `.gitignore` only protects this repo, not the user's.

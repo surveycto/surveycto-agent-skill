@@ -38,9 +38,25 @@ Translation uses an OpenAI chat model. The user can pick:
 - `cheap` -> `gpt-4.1-nano` (DEFAULT; lowest cost, strong multilingual quality)
 - `better` -> `gpt-4o-mini` (slightly higher cost; use for nuanced/high-stakes text)
 
-Pass `--model cheap|better` (other model ids are rejected unless their pricing is
-added, so the estimate stays accurate). Default to `cheap` and
-only suggest `better` if the user reports quality concerns on nuanced text.
+Pass `--model cheap|better` (other model ids are rejected unless added to the
+model menu with a rate in `pricing.json`, so the estimate stays accurate). Default
+to `cheap` and only suggest `better` if the user reports quality concerns on
+nuanced text.
+
+### Pricing and the in-flight price check
+
+OpenAI publishes no pricing API, so the token rates live in
+`assets/transcribe-translate/pricing.json` with the date they were last verified.
+At the start of a run, offer to check current prices online so the estimate is
+accurate: "May I check OpenAI's current prices to estimate the cost? Otherwise
+I'll use the stored rates from <rates_as_of>." If the user agrees, read the
+pricing page (`pricing_source_url`) and update with
+`pricing.py set-translation <model_id> --in-per-mtok ... --out-per-mtok ...
+--as-of <today>`; if they decline, use the stored rates. Either way, tell the user
+which rates were used and as of when (`estimate_cost` returns `rates_as_of` and
+`rates_source`). The pre-run estimate is approximate (de-duplication usually makes
+it lower); the actual spend reported after the run is computed from the response's
+real token counts.
 
 ## What the module gives you
 
@@ -79,9 +95,12 @@ Built in:
 2. **Identify the columns** to translate (read only the header; you do not need to
    read the data). Ask the user if unsure.
 3. **Get the target language** as an ISO 639-1 code (`en`, `es`, `fr`, `sw`, ...).
-4. **Estimate cost and show the PII warning.** Call `estimate_cost(...)`. Show the
-   cell count, the approximate USD cost, and the one-line privacy reminder that the
-   text is sent to OpenAI. Keep the privacy reminder on every run.
+4. **Offer the in-flight price check, then estimate cost and show the PII
+   warning.** First offer to check current OpenAI prices (see "Pricing and the
+   in-flight price check"); refresh `pricing.json` if the user agrees. Then call
+   `estimate_cost(...)` and show the cell count, the approximate USD cost (noting
+   it is approximate and as of `rates_as_of`), and the one-line privacy reminder
+   that the text is sent to OpenAI. Keep the privacy reminder on every run.
 5. **Wait for explicit confirmation.** Never translate without showing the cost
    first, even if the user said "just do it" up front.
 6. **Translate.** Call `translate_csv(...)` with `confirm=True` and a `cache_path`
@@ -90,9 +109,10 @@ Built in:
 7. **Report, including spend.** Give the output path and the returned stats
    (translated, cached, skipped, chars sent). Always tell the user what this run
    actually cost and the running total: report `actual_usd_display` ("this run")
-   and `total_spend_usd_display` ("total so far on this machine"). Do this on
-   every paid run, not just the first. Do not paste translated content into chat
-   unless asked for specific rows.
+   and `total_spend_usd_display` ("total so far on this machine"). This actual
+   figure is the real post-run cost from the response's token counts, not the
+   pre-run estimate. Do this on every paid run, not just the first. Do not paste
+   translated content into chat unless asked for specific rows.
 
 ### Running it: use the CLI
 
@@ -151,8 +171,10 @@ enumerator,encuestador,enquêteur
 Pass a `cache_path` (e.g. `translation-cache.db`) so re-translating a refreshed
 export only pays for changed cells. The cache stores the translated text keyed by
 a hash of the source (not the source text itself); the translations can still be
-sensitive, so keep it with the user's data, not in a shared or version-controlled
-location (the skill gitignores it and sets it to 0600).
+sensitive. The module creates it chmod 0600, but it does not manage your version
+control: the `.gitignore` in this skill's source repo does not travel with the
+packaged skill, so in the user's own project place the cache (and the output CSV)
+outside any version-controlled folder, or add them to that project's ignore list.
 
 ## Quality reminder
 

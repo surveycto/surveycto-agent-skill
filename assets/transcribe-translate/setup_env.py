@@ -10,15 +10,18 @@ touching the system Python.
 
 Run once before translating or transcribing:
 
-    python3 setup_env.py            # installs openai (translation + transcription)
+    python3 setup_env.py            # installs the pinned openai
 
-It prints the path to the environment's Python interpreter on the last line,
-prefixed with ``VENV_PYTHON=``. Use that interpreter to run the modules, e.g.:
+The OpenAI client is pinned to a verified version (``OPENAI_VERSION``); the script
+installs exactly that and re-pins if a different version is present.
+
+It prints the environment's Python interpreter path on the last line, prefixed
+``VENV_PYTHON=``. Use that interpreter to run the modules, e.g.:
 
     <printed-python> translation.py --help
 
-It is idempotent: re-running reuses the existing environment and only installs
-what is missing. It never prints or touches the OpenAI API key.
+Idempotent: re-running reuses the existing environment and installs only what is
+missing. Never prints or touches the OpenAI API key.
 
 Standard library only, so it runs before anything is installed.
 """
@@ -35,6 +38,15 @@ from pathlib import Path
 
 VENV_DIR = Path.home() / ".surveycto-skill" / "venv"
 
+# Pin the OpenAI client to a verified version. This dependency runs in a
+# credential-bearing environment and handles survey payloads, so the version is
+# fixed for reproducibility and supply-chain safety: a bare ``pip install openai``
+# could pull a newer or compromised release. Bump only after testing against the
+# live API. The error-detection and usage/billing handling in
+# transcription.py/translation.py were verified against this version.
+OPENAI_VERSION = "2.41.1"
+OPENAI_REQUIREMENT = f"openai=={OPENAI_VERSION}"
+
 
 def _venv_python(venv_dir: Path) -> Path:
     """Path to the venv's interpreter (POSIX bin/, Windows Scripts/)."""
@@ -42,14 +54,19 @@ def _venv_python(venv_dir: Path) -> Path:
     return win if win.exists() or os.name == "nt" else venv_dir / "bin" / "python"
 
 
-def _installed(python: Path, module: str) -> bool:
+def _installed_version(python: Path, module: str) -> str | None:
+    """Return the installed module's ``__version__``, or None if not importable."""
     try:
-        return subprocess.run(
-            [str(python), "-c", f"import {module}"],
-            capture_output=True, timeout=60,
-        ).returncode == 0
+        result = subprocess.run(
+            [str(python), "-c",
+             f"import {module} as m; print(getattr(m, '__version__', ''))"],
+            capture_output=True, text=True, timeout=60,
+        )
     except (subprocess.SubprocessError, OSError):
-        return False
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() or None
 
 
 def _ffmpeg_hint() -> str:
@@ -63,7 +80,7 @@ def _ffmpeg_hint() -> str:
 
 def _check_ffmpeg() -> bool:
     """Warn (do not fail) if ffmpeg/ffprobe is missing: transcription needs it for
-    audio duration and chunking; translation does not. Returns True if present."""
+    audio duration and chunking, translation does not. Returns True if present."""
     have = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
     if have:
         print("ffmpeg/ffprobe found on PATH.", flush=True)
@@ -97,13 +114,17 @@ def main(argv: list[str] | None = None) -> int:
     if not python.exists():
         raise SystemExit(f"Virtual environment creation did not produce {python}.")
 
-    if _installed(python, "openai"):
-        print("openai already installed.", flush=True)
+    installed = _installed_version(python, "openai")
+    if installed == OPENAI_VERSION:
+        print(f"openai {OPENAI_VERSION} already installed.", flush=True)
     else:
-        _pip_install(python, "openai")
+        if installed:
+            print(f"openai {installed} present; installing pinned {OPENAI_VERSION}.",
+                  flush=True)
+        _pip_install(python, OPENAI_REQUIREMENT)
 
-    # Transcription needs ffmpeg on PATH; warn here so it is caught at setup time
-    # rather than only when a transcription run fails.
+    # Transcription needs ffmpeg on PATH; warn at setup time rather than only when a
+    # transcription run fails.
     _check_ffmpeg()
 
     # Last line, machine-readable, so the agent can capture the interpreter path.

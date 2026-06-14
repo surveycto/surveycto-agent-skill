@@ -1,17 +1,17 @@
 """Running record of actual OpenAI spend for the translate/transcribe helpers.
 
-The estimate shown before a run is a forecast; this module records what was
-*actually* billed after each paid run and keeps a cumulative total, so the agent
-can tell the user both "this run cost $X" and "you have spent $Y so far" every
-time. Only paid OpenAI calls are recorded; fully-cached re-runs record nothing.
+The pre-run estimate is a forecast; this module records what was *actually* billed
+after each paid run and keeps a cumulative total, so the agent can report both
+"this run cost $X" and "you have spent $Y so far". Only paid OpenAI calls are
+recorded; fully-cached re-runs record nothing.
 
-The ledger is a small JSON file at ``~/.surveycto-skill/spend-ledger.json``. It
-holds only costs and model names, never source text, transcripts, or the API key.
+The ledger is a small JSON file at ``~/.surveycto-skill/spend-ledger.json``,
+holding only costs and model names, never source text, transcripts, or the API
+key.
 
-The cumulative ``total_usd`` and the per-operation totals are persisted directly
-(not re-derived from the run history, which is capped), so they stay exact even
-after many runs. Reads and writes tolerate a missing or corrupt file. The total
-is exact under normal single-process use; the file is written atomically so a
+The cumulative ``total_usd`` and per-operation totals are persisted directly (not
+re-derived from the capped run history), so they stay exact after many runs. Reads
+and writes tolerate a missing or corrupt file. The file is written atomically so a
 crash cannot leave it truncated, but two runs finishing at the exact same instant
 could still lose one update (cost display only, never the transcription output).
 
@@ -55,8 +55,8 @@ def _empty() -> dict:
 def _load() -> dict:
     """Load the ledger, tolerating a missing, corrupt, or hand-edited file.
 
-    Every numeric field is coerced defensively so a malformed value (e.g. a
-    string where a number is expected) can never raise into the calling work.
+    Every numeric field is coerced defensively so a malformed value (e.g. a string
+    where a number is expected) can never raise into the calling work.
     """
     if not LEDGER_PATH.is_file():
         return _empty()

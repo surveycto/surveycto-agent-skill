@@ -1,11 +1,9 @@
 """OpenAI credential handling for the translation and transcription helpers.
 
-OpenAI authenticates with a single API key string (``sk-...``). Unlike a file
-path, the key itself is the secret, so the rule this module enforces is: the
-agent must NEVER print, echo, log, or paste the key value anywhere. It is
-resolved from the environment or a small config file, placed into the
-``OPENAI_API_KEY`` environment variable so the OpenAI SDK picks it up, and never
-emitted.
+OpenAI authenticates with a single API key string (``sk-...``). The key itself is
+the secret, so this module enforces one rule: NEVER print, echo, log, or paste the
+key value anywhere. It is resolved from the environment or a small config file,
+placed into ``OPENAI_API_KEY`` for the SDK, and never emitted.
 
 Resolution order:
 
@@ -14,8 +12,8 @@ Resolution order:
 2. ``~/.surveycto-skill/openai-config.json`` (key stored there, file chmod 600).
 3. Raise a clear error pointing to the setup coaching, with NO key material.
 
-Preferred onboarding is a file handoff, so the key never appears in chat (where
-it would be logged) or on a command line:
+Preferred onboarding is a file handoff, so the key never appears in chat (where it
+would be logged) or on a command line:
 
     python3 openai_auth.py template            # write openai-key.txt for the user to edit
     # user pastes their key into that file and saves it, then:
@@ -58,7 +56,7 @@ def save_api_key(key: str) -> None:
     """Record the user's OpenAI API key in the config file (chmod 600).
 
     The key is written once and never echoed. A minimal sanity check rejects an
-    obviously-wrong value, but the error never includes the key.
+    obviously-wrong value; the error never includes the key.
 
     :param key: The OpenAI API key string (e.g. ``sk-...``).
     :raises ValueError: If the key is empty or does not look like an API key.
@@ -70,8 +68,8 @@ def save_api_key(key: str) -> None:
             "string). Check the value and try again. (The key is not shown here.)"
         )
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    # Create the file atomically with 0600 (os.open applies the mode on creation,
-    # masked only by umask), so the key is never briefly world-readable between a
+    # Create with 0600 at open time (os.open applies the mode on creation, masked
+    # only by umask) so the key is never briefly world-readable between a
     # default-mode create and a later chmod. O_TRUNC replaces any existing file.
     fd = os.open(CONFIG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     # O_TRUNC does not reset the mode of a pre-existing file, so tighten it too.
@@ -105,7 +103,7 @@ def write_key_template(path: str) -> str:
 
     Onboarding without exposing the key in chat (the Cowork sandbox cannot see the
     user's terminal env, and chat text is logged): the agent writes this file, the
-    user edits it in the working folder and saves, then the agent calls
+    user edits and saves it in the working folder, then the agent calls
     ``import_key_file`` to load it. This function never handles a real key.
     """
     p = Path(path)
@@ -147,7 +145,7 @@ def import_key_file(path: str, delete_after: bool = True) -> str:
     save_api_key(candidate)  # validates the sk- shape and stores chmod 600
     if delete_after:
         try:
-            # best-effort overwrite before unlink so the plaintext does not linger
+            # overwrite before unlink so the plaintext does not linger
             with open(p, "w", encoding="utf-8") as f:
                 f.write("# imported and removed\n")
             p.unlink()
@@ -159,9 +157,9 @@ def import_key_file(path: str, delete_after: bool = True) -> str:
 def _read_config_key() -> str | None:
     """Read the stored key from the config file, or None if absent/unreadable.
 
-    A missing, unreadable, or corrupt config returns None rather than raising:
-    that keeps a malformed file from crashing the workflow, and avoids a JSON
-    error message that could quote a fragment of the file (and thus of the key).
+    A missing, unreadable, or corrupt config returns None rather than raising: a
+    malformed file must not crash the workflow, and a JSON error message could
+    quote a fragment of the file (and thus of the key).
     """
     if not CONFIG_PATH.is_file():
         return None

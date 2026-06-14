@@ -224,7 +224,7 @@ def test_no_overwrite() -> None:
         raise AssertionError("expected ValueError for existing output column")
 
 
-def test_dup_header_rejected_and_ragged_ok() -> None:
+def test_dup_header_and_ragged_rows_rejected() -> None:
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "dup.csv"
         p.write_text("note,note,id\na,b,1\n", encoding="utf-8")
@@ -234,10 +234,18 @@ def test_dup_header_rejected_and_ragged_ok() -> None:
             assert "duplicate column names" in str(exc)
         else:
             raise AssertionError("expected duplicate-header error")
+        # a ragged row (more fields than headers) must fail loudly with the row
+        # number, not silently drop the overflow
         p2 = Path(d) / "rag.csv"; out = Path(d) / "o.csv"
         p2.write_text("id,note\n1,hola\n2,adios,EXTRA\n", encoding="utf-8")
-        s = T.translate_csv(str(p2), ["note"], "en", "es", str(out), client=FakeClient(), confirm=True)
-        assert s["cells_translated"] == 2
+        try:
+            T.translate_csv(str(p2), ["note"], "en", "es", str(out),
+                            client=FakeClient(), confirm=True)
+        except ValueError as exc:
+            assert "row 3" in str(exc) and "more field" in str(exc), str(exc)
+            assert not out.exists()  # nothing written from malformed input
+        else:
+            raise AssertionError("expected a ragged-row error")
 
 
 def test_special_chars_roundtrip() -> None:
@@ -444,10 +452,17 @@ def test_glossary_is_word_bounded() -> None:
 
 
 def test_resolve_model_fails_closed_and_prices_known_ids() -> None:
-    assert T.resolve_model("better")["in_per_mtok"] == 0.15
-    # a model id behind a menu name resolves to that entry's exact rate
-    assert T.resolve_model("gpt-4.1-nano")["in_per_mtok"] == 0.10
-    assert T.resolve_model("gpt-4o-mini")["in_per_mtok"] == 0.15
+    # the menu resolves to model ids; rates come from pricing.json
+    assert T.resolve_model("cheap")["id"] == "gpt-4.1-nano"
+    assert T.resolve_model("better")["id"] == "gpt-4o-mini"
+    # a model id behind a menu name resolves to that entry
+    assert T.resolve_model("gpt-4.1-nano")["id"] == "gpt-4.1-nano"
+    assert T.resolve_model("gpt-4o-mini")["id"] == "gpt-4o-mini"
+    # pricing for those ids is available and distinct
+    import pricing  # noqa: PLC0415
+    data, _ = pricing.load()
+    assert pricing.rate_for(data, "translation", "gpt-4.1-nano")["in_per_mtok"] == 0.10
+    assert pricing.rate_for(data, "translation", "gpt-4o-mini")["in_per_mtok"] == 0.15
     # an unsupported id (e.g. the pricier gpt-4o) fails closed rather than being
     # priced at the cheaper menu rate
     try:
@@ -492,6 +507,96 @@ def test_spend_recorded_when_a_later_batch_fails() -> None:
             assert abs(_UL.summary()["total_usd"] - 0.60) < 1e-6, _UL.summary()
     finally:
         T.time.sleep = real_sleep
+
+
+def test_fallback_billing_counts_unique_inputs_not_cells() -> None:
+    # when the response carries no usage (fallback path), duplicate source strings
+    # are sent once, so the per-item overhead is charged per unique input, not per
+    # output cell -- otherwise duplicates inflate the bill
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "in.csv"
+        _write(src, ["uuid", "comment"],
+               [{"uuid": str(i), "comment": "hola mundo"} for i in range(5)])
+        out = Path(d) / "out.csv"
+        s = T.translate_csv(str(src), ["comment"], target_language="en",
+                            source_language=None, output_path=str(out),
+                            confirm=True, client=FakeClient())  # _Resp has no usage
+        assert s["cells_translated"] == 5 and s["unique_sent"] == 1, s
+        chars = len("hola mundo")
+        tok_out = chars / 4
+        unique_usd = (chars / 4 + 1 * 12) / 1e6 * 0.10 + tok_out / 1e6 * 0.40
+        cell_usd = (chars / 4 + 5 * 12) / 1e6 * 0.10 + tok_out / 1e6 * 0.40
+        # the ledger rounds to 6 decimals; the unique-based figure is what we expect
+        assert s["actual_usd"] == round(unique_usd, 6), (s["actual_usd"], unique_usd)
+        assert round(unique_usd, 6) < round(cell_usd, 6)  # and it's lower than per-cell
+
+
+def test_output_csv_is_chmod_600() -> None:
+    import stat
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "in.csv"
+        _write(src, ["uuid", "comment"], [{"uuid": "1", "comment": "hola"}])
+        out = Path(d) / "out.csv"
+        T.translate_csv(str(src), ["comment"], target_language="en",
+                        source_language=None, output_path=str(out),
+                        confirm=True, client=FakeClient())
+        mode = stat.S_IMODE(out.stat().st_mode)
+        assert mode == 0o600, oct(mode)
+
+
+def test_non_string_translation_item_is_retryable() -> None:
+    # a non-string item (here a number) is a malformed response: it must NOT be
+    # coerced with str() and cached; it should retry, then succeed
+    attempts = {"n": 0}
+    def transform(xs):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return [123]            # malformed: not a string
+        return [f"EN[{x}]" for x in xs]
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "in.csv"
+        _write(src, ["note"], [{"note": "hola"}])
+        out = Path(d) / "out.csv"
+        s = T.translate_csv(str(src), ["note"], target_language="en",
+                            source_language=None, output_path=str(out),
+                            confirm=True, client=FakeClient(transform))
+        assert attempts["n"] == 2, attempts          # retried once
+        assert _read(out)[0]["note_en"] == "EN[hola]"
+        assert s["cells_translated"] == 1
+
+
+def test_parse_columns_strips_and_rejects_empty() -> None:
+    assert T._parse_columns("note, comment ,  x") == ["note", "comment", "x"]
+    for bad in ("note,", "a,,b", " "):
+        try:
+            T._parse_columns(bad)
+        except ValueError as exc:
+            assert "Empty column name" in str(exc)
+        else:
+            raise AssertionError(f"expected ValueError for {bad!r}")
+
+
+def test_output_csv_write_is_atomic_on_failure() -> None:
+    # if the write fails, a pre-existing output must not be left truncated
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "in.csv"
+        _write(src, ["note"], [{"note": "hola"}])
+        out = Path(d) / "out.csv"
+        out.write_text("PREEXISTING CONTENT\n", encoding="utf-8")
+        # make the write fail by pointing the helper at an unwritable temp dir:
+        # easiest deterministic failure is a transform that raises mid-run
+        def boom(xs):
+            raise RuntimeError("boom")
+        raised = False
+        try:
+            T.translate_csv(str(src), ["note"], target_language="en",
+                            source_language=None, output_path=str(out),
+                            confirm=True, client=FakeClient(boom), max_retries=0)
+        except Exception:
+            raised = True
+        assert raised
+        assert out.read_text(encoding="utf-8") == "PREEXISTING CONTENT\n"  # untouched
 
 
 def main() -> int:

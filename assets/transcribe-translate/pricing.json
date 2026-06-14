@@ -1,0 +1,14 @@
+{
+  "last_verified": "2026-06-14",
+  "source_url": "https://openai.com/api/pricing/",
+  "currency": "USD",
+  "transcription": {
+    "gpt-4o-mini-transcribe": {"billing": "token", "in_per_mtok": 1.25, "out_per_mtok": 5.0, "est_per_min": 0.003},
+    "gpt-4o-transcribe": {"billing": "token", "in_per_mtok": 2.5, "out_per_mtok": 10.0, "est_per_min": 0.006},
+    "whisper-1": {"billing": "minute", "usd_per_min": 0.006}
+  },
+  "translation": {
+    "gpt-4.1-nano": {"in_per_mtok": 0.1, "out_per_mtok": 0.4},
+    "gpt-4o-mini": {"in_per_mtok": 0.15, "out_per_mtok": 0.6}
+  }
+}

@@ -29,8 +29,27 @@ Transcription model menu:
 - `accurate` -> `gpt-4o-transcribe` (~$0.006/audio-min)
 - `whisper` -> `whisper-1` (~$0.006/audio-min)
 
-Pass `--model fast|accurate|whisper` (other model ids are rejected unless their
-per-minute rate is added, so the estimate stays accurate).
+Pass `--model fast|accurate|whisper` (other model ids are rejected unless added to
+the model menu with a rate in `pricing.json`, so the estimate stays accurate). The
+`~$/min` figures above are indicative; the live rates come from `pricing.json`.
+
+### Pricing and the in-flight price check
+
+OpenAI publishes no pricing API, so the rates that turn usage into dollars live in
+`assets/transcribe-translate/pricing.json` with the date they were last verified.
+At the start of a transcription run, offer to check current prices online so the
+estimate is accurate: "May I check OpenAI's current prices to estimate the cost?
+Otherwise I'll use the stored rates from <rates_as_of>." If the user agrees, read
+the pricing page (`pricing_source_url`), then update the rate with
+`pricing.py set-transcription <model_id> --in-per-mtok ... --out-per-mtok ...
+--est-per-min ... --as-of <today>` (whisper-1 uses `--usd-per-min`). If the user
+declines, use the stored rates. Either way, tell the user which rates were used
+and as of when (`estimate_cost` returns `rates_as_of` and `rates_source`).
+
+The estimate is approximate: the gpt-4o-* models bill per token, so the pre-run
+per-minute figure is a guide and the real cost (reported after the run) is
+computed from the response's actual token counts. whisper-1 bills per minute, so
+its estimate is close.
 
 ### Long audio: which model, and automatic chunking
 
@@ -87,8 +106,11 @@ echoes audio content).
 3. **Spoken language is auto-detected** by default, so this is optional. If the
    user knows the language and wants slightly better accuracy/latency, pass it as
    an ISO-639-1 hint via `--language` (e.g. `--language sw`); omit it otherwise.
-4. **Estimate cost and show the PII warning.** Call `estimate_cost(...)`. Show the
-   total duration, estimated USD cost, any `unknown_duration` files, and the
+4. **Offer the in-flight price check, then estimate cost and show the PII
+   warning.** First offer to check current OpenAI prices (see "Pricing and the
+   in-flight price check"); refresh `pricing.json` if the user agrees. Then call
+   `estimate_cost(...)` and show the total duration, estimated USD cost (noting it
+   is approximate and as of `rates_as_of`), any `unknown_duration` files, and the
    privacy reminder that the audio is sent to OpenAI.
 5. **Wait for explicit confirmation** before transcribing.
 6. **Transcribe.** Call `transcribe_files(...)` with `confirm=True` and a
@@ -97,8 +119,10 @@ echoes audio content).
    (transcribed, cached, failed). For OpenAI runs, always tell the user what this
    run actually cost and the running total: report `actual_usd_display` ("this
    run") and `total_spend_usd_display` ("total so far on this machine"), on every
-   paid run. Mention any files with an error status. Do not paste transcript
-   content into chat unless asked for specific rows.
+   paid run. This actual figure is the real post-run cost (token counts for the
+   gpt-4o-* models, duration for whisper-1), not the pre-run estimate. Mention any
+   files with an error status. Do not paste transcript content into chat unless
+   asked for specific rows.
 
 ### Running it: use the CLI
 
@@ -138,9 +162,11 @@ print(stats["output_path"], stats["transcribed"], stats["cached"], stats["failed
 ## Caching
 
 Pass a `cache_path` (e.g. `transcription-cache.db`) so re-running a batch only
-transcribes files not seen before (keyed on file bytes + model). The cache holds
-transcript text, so it is sensitive: keep it with the user's data, not in a
-shared or version-controlled location.
+transcribes files not seen before (keyed on file bytes + model + language). The
+cache holds transcript text, so it is sensitive: the module creates it chmod 0600,
+but the `.gitignore` in this skill's source repo does not travel with the packaged
+skill, so in the user's own project place the cache (and the output CSV) outside
+any version-controlled folder, or add them to that project's ignore list.
 
 ## Quality reminder
 
