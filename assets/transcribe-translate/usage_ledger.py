@@ -3,8 +3,7 @@
 The estimate shown before a run is a forecast; this module records what was
 *actually* billed after each paid run and keeps a cumulative total, so the agent
 can tell the user both "this run cost $X" and "you have spent $Y so far" every
-time. Only paid (OpenAI) work is recorded; the local provider is free and records
-nothing.
+time. Only paid OpenAI calls are recorded; fully-cached re-runs record nothing.
 
 The ledger is a small JSON file at ``~/.surveycto-skill/spend-ledger.json``. It
 holds only costs and model names, never source text, transcripts, or the API key.
