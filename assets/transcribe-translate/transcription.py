@@ -238,29 +238,19 @@ def _extract_chunk(src: str, start: float, length: float, dst: str) -> None:
 
 
 def _is_too_large_error(exc: Exception) -> bool:
-    """True if the OpenAI error means the audio request exceeded the model limit.
+    """True if the OpenAI error means the audio request exceeded a request limit.
 
-    The condition surfaces under different SDK classes (a 400 for the token limit,
-    a 413 for the byte limit), so detection spans class name, structured status,
-    and message phrase rather than one class. It is intentionally inclusive: a
-    false positive only wastes a split that fails safely at the floor, whereas a
-    false negative fails the whole file. The 413 is matched on the status field,
-    not a bare "413" substring (which would hit request ids in unrelated errors).
+    Keyed to the structured fields the SDK exposes, confirmed by triggering both
+    cases against the live API:
+      * token/context limit (gpt-4o-* on long audio): ``openai.BadRequestError``,
+        HTTP 400, ``code == "input_too_large"``.
+      * byte limit (request body over 25 MB): ``openai.APIStatusError``, HTTP 413.
+    We match on ``code`` and ``status_code`` (not message text), so detection is
+    deterministic and won't fire on unrelated 400s.
     """
-    name = type(exc).__name__.lower()
-    if "toolarge" in name or "payloadtoolarge" in name:
+    if getattr(exc, "code", None) == "input_too_large":
         return True
-    status = getattr(exc, "status_code", None)
-    if status == 413:
-        return True
-    code = str(getattr(exc, "code", "") or "").lower()
-    if "context_length" in code or "too_large" in code:
-        return True
-    msg = str(exc).lower()
-    return any(s in msg for s in (
-        "input_too_large", "too large", "maximum context length",
-        "exceeds the maximum", "request entity too large",
-    ))
+    return getattr(exc, "status_code", None) == 413
 
 
 def _transcribe_openai_file(path: str, model_id: str, client=None) -> str:

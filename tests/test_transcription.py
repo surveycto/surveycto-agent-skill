@@ -30,7 +30,13 @@ _UL.LEDGER_PATH = _UL.LEDGER_DIR / "spend-ledger.json"
 
 
 class BadRequestError(Exception):
-    """Named to match the OpenAI SDK error class _is_too_large_error checks for."""
+    """Mirrors the real openai.BadRequestError for the token-limit case: a 400 with
+    structured code='input_too_large' (the fields _is_too_large_error keys off,
+    confirmed against the live API)."""
+    def __init__(self, message="", code="input_too_large", status_code=400):
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
 
 
 class _Resp:
@@ -291,24 +297,23 @@ def test_unknown_exception_status_is_type_name_only() -> None:
         X._audio_duration_seconds = orig
 
 
-def test_too_large_detection_is_not_pinned_to_one_class() -> None:
-    class APIStatusError(Exception):
-        pass
-    assert X._is_too_large_error(APIStatusError("maximum context length exceeded"))
-    assert X._is_too_large_error(BadRequestError("input_too_large"))
-    # real token-limit message from the API contains "too large"
-    assert X._is_too_large_error(BadRequestError(
-        "Total number of tokens in instructions + audio is too large"))
+def test_too_large_detection_uses_structured_fields() -> None:
+    # Mirrors the real API responses (captured live):
+    # token limit -> 400 BadRequestError, code='input_too_large'
+    class TokenLimit(Exception):
+        code = "input_too_large"; status_code = 400
+    assert X._is_too_large_error(TokenLimit("Total number of tokens ... is too large"))
+    # byte limit -> 413 APIStatusError, code=None
+    class TooBig(Exception):
+        code = None; status_code = 413
+    assert X._is_too_large_error(TooBig("413: Maximum content size limit exceeded"))
+    # unrelated errors are NOT too-large: a different 400 code, a rate-limit, or a
+    # message that merely contains "413"/"too large" in prose
+    class OtherBadRequest(Exception):
+        code = "invalid_value"; status_code = 400
+    assert not X._is_too_large_error(OtherBadRequest("unsupported file format"))
     assert not X._is_too_large_error(Exception("rate limit reached"))
-    # a bare "413" inside an unrelated message must NOT be treated as too-large
-    assert not X._is_too_large_error(Exception("request id req-1413abc rate limited"))
-    # a structured 413 status IS too-large
-    class Sized(Exception):
-        status_code = 413
-    assert X._is_too_large_error(Sized("payload"))
-    class Coded(Exception):
-        code = "context_length_exceeded"
-    assert X._is_too_large_error(Coded("nope"))
+    assert not X._is_too_large_error(Exception("request id req-1413abc; file is too large for email"))
 
 
 def test_stitch_window_is_bounded() -> None:
