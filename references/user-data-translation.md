@@ -41,6 +41,32 @@ Translation uses an OpenAI chat model. The user can pick:
 Pass `--model cheap|better` (or an explicit model id). Default to `cheap` and
 only suggest `better` if the user reports quality concerns on nuanced text.
 
+### On-device provider (NLLB, EXPERIMENT)
+
+When the user's data-governance rules forbid sending response text to a third
+party, steer them here. `--provider local` translates on-device with NLLB-200
+(distilled-600M) instead of OpenAI: no API key, no cost, and the cell text never
+leaves the machine. Install the dependencies once with
+`python3 setup_env.py --local-translate` (pip-only: transformers, torch,
+sentencepiece, langdetect; runs on Windows/Linux/macOS, any modern CPU; an NVIDIA
+GPU accelerates but is not required). The source language is auto-detected per
+cell; the target must be a language NLLB supports (common survey languages are
+mapped). Run `python3 system_check.py` to confirm the machine has enough RAM
+(~3 GB).
+
+Reassure the user about what "on-device" means: the **first run downloads the
+model once from the internet** (Hugging Face, ~4.6 GB), and you may see a harmless
+"unauthenticated requests to the HF Hub / set a HF_TOKEN" notice during that
+download. That is the model weights being fetched, not the user's data. After the
+model is cached, translation runs **fully offline, and the response text is never
+uploaded**. The `--confirm` gate still applies (the same safety gate as the cloud
+path), but a local run costs `$0.00` and sends nothing.
+
+Quality is good on straightforward survey text and close to the cloud models, but
+weaker on idiomatic or code-switched text, so recommend a fluent-speaker
+spot-check for high-stakes use. This is experimental; the cloud provider remains
+the default and the most accurate.
+
 ## What the module gives you
 
 - `estimate_cost(csv_path, columns, target_language, model=None)` counts billable

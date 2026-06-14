@@ -10,7 +10,10 @@ touching the system Python.
 
 Run once before translating or transcribing:
 
-    python3 setup_env.py            # installs openai (translation + transcription)
+    python3 setup_env.py                    # installs openai (cloud translation + transcription)
+    python3 setup_env.py --local            # + faster-whisper (on-device transcription)
+    python3 setup_env.py --local-translate  # + NLLB deps (on-device translation)
+    # combine --local and --local-translate for both on-device engines
 
 It prints the path to the environment's Python interpreter on the last line,
 prefixed with ``VENV_PYTHON=``. Use that interpreter to run the modules, e.g.:
@@ -86,7 +89,12 @@ def _pip_install(python: Path, package: str) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Set up the translate/transcribe environment.")
-    parser.parse_args(argv)
+    parser.add_argument("--local", action="store_true",
+                        help="also install faster-whisper for on-device transcription")
+    parser.add_argument("--local-translate", action="store_true",
+                        help="also install NLLB deps (transformers, torch, sentencepiece, "
+                             "langdetect) for on-device translation")
+    args = parser.parse_args(argv)
 
     python = _venv_python(VENV_DIR)
     if not python.exists():
@@ -101,6 +109,20 @@ def main(argv: list[str] | None = None) -> int:
         print("openai already installed.", flush=True)
     else:
         _pip_install(python, "openai")
+
+    if args.local:
+        if _installed(python, "faster_whisper"):
+            print("faster-whisper already installed.", flush=True)
+        else:
+            _pip_install(python, "faster-whisper")
+
+    if args.local_translate:
+        for mod, pkg in (("transformers", "transformers"), ("torch", "torch"),
+                         ("sentencepiece", "sentencepiece"), ("langdetect", "langdetect")):
+            if _installed(python, mod):
+                print(f"{pkg} already installed.", flush=True)
+            else:
+                _pip_install(python, pkg)
 
     # Transcription needs ffmpeg on PATH; warn here so it is caught at setup time
     # rather than only when a transcription run fails.

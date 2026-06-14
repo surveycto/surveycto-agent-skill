@@ -357,6 +357,41 @@ def test_all_cached_run_records_no_spend() -> None:
         assert s2["total_spend_usd"] == total_after_first, s2  # total unchanged
 
 
+class _FakeLocalTranslator:
+    """Stand-in for the NLLB on-device translator (no model/torch needed)."""
+    def __init__(self): self.seen = []
+    def translate(self, texts, target_language):
+        self.seen.extend(texts)
+        return [f"LOCAL[{t}]" for t in texts]
+
+
+def test_local_provider_translates_free_and_records_nothing() -> None:
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        _write(p, ["note"], [{"note": "hola"}, {"note": "999"}, {"note": "adios"}])
+        tr = _FakeLocalTranslator()
+        s = T.translate_csv(str(p), ["note"], "en", None, str(out), confirm=True,
+                            provider="local", local_translator=tr)
+        assert s["cells_translated"] == 2 and s["cells_skipped"] == 1, s
+        assert s["actual_usd"] == 0.0 and s["actual_usd_display"] == "$0.00", s
+        assert s["model"].startswith("local:"), s
+        r = _read(out)
+        assert r[0]["note_en"] == "LOCAL[hola]" and r[2]["note_en"] == "LOCAL[adios]"
+        assert "999" not in tr.seen  # skip-list still applies on the local path
+
+
+def test_local_estimate_is_free_and_on_device() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "x.csv"
+        _write(p, ["note"], [{"note": "hola mundo"}])
+        est = T.estimate_cost(str(p), ["note"], "en", provider="local")
+        assert est["estimated_usd"] == 0.0 and "on-device" in est["estimated_usd_display"], est
+        assert "NOT" in est["pii_warning"] and "on-device" in est["pii_warning"], est
+        assert "will be sent to OpenAI" not in est["pii_warning"], est
+        assert est["model"].startswith("local:"), est
+
+
 def test_cache_file_is_chmod_600() -> None:
     import stat
     with tempfile.TemporaryDirectory() as d:
