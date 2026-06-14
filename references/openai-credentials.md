@@ -120,11 +120,12 @@ command. (Advanced/non-sandboxed users who already have the key in their
 environment can instead set `OPENAI_API_KEY`, which `configure_openai()` honors
 first.)
 
-As defense-in-depth, `template` also adds best-effort `Read`-deny rules for the
-key file and config to `.claude/settings.json`. This only gates the `Read` tool
-(it does not stop a `bash cat`/`open()`, and a mid-session change may not apply
-until the next session), so it is a backstop, not a guarantee: the real
-protection is importing the key without reading the file and deleting it after.
+The protection here is concrete: the key is imported without the agent ever
+reading the file, and the file is deleted afterward. An operator who wants an
+extra layer can add their own `Read`-deny rule for the key file and config in
+their Claude Code permissions (`.claude/settings.json`); note that only gates the
+`Read` tool, not a `bash` read, so it is a backstop, not a guarantee. The skill
+does not generate those rules itself.
 
 ### Step 4: Install the client library
 

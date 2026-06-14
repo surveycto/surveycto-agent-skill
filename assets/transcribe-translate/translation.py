@@ -275,19 +275,20 @@ _NO_EGRESS_MSG = (
 )
 
 
-def _is_connection_error(exc: Exception) -> bool:
-    """True if the error looks like a blocked/failed network connection (not an
-    API/auth error), so we can give actionable egress guidance. Matched on class
-    name and generic phrases, never echoing any content."""
-    name = type(exc).__name__.lower()
-    if any(k in name for k in ("connection", "timeout", "connecterror")):
-        return True
-    msg = str(exc).lower()
-    return any(s in msg for s in (
-        "connection error", "failed to establish", "getaddrinfo",
-        "name or service not known", "temporary failure in name resolution",
-        "network is unreachable", "connection refused", "no route to host",
-    ))
+def _is_egress_error(exc: Exception) -> bool:
+    """True iff ``exc`` is the OpenAI SDK's connection-failure type.
+
+    Deterministic: keyed to the SDK's documented exception contract, not message
+    text. ``openai.APIConnectionError`` is raised for any failure to reach the API
+    (DNS, refused, unreachable); ``APITimeoutError`` subclasses it, so one
+    isinstance check covers "couldn't connect" (a blocked egress) without
+    misclassifying API/auth errors that did reach the server.
+    """
+    try:
+        from openai import APIConnectionError  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 - openai not importable -> cannot be this type
+        return False
+    return isinstance(exc, APIConnectionError)
 
 
 def _usage_tokens(resp) -> tuple[int, int] | None:
@@ -350,7 +351,7 @@ def _translate_batch(client, texts: list[str], target_language: str,
         except Exception as exc:
             attempt += 1
             if attempt > max_retries or not _is_retryable(exc):
-                if _is_connection_error(exc):
+                if _is_egress_error(exc):
                     raise RuntimeError(_NO_EGRESS_MSG) from None
                 raise RuntimeError(
                     f"translation API call failed ({type(exc).__name__})") from None

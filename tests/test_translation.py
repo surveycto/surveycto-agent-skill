@@ -368,39 +368,54 @@ def test_cache_file_is_chmod_600() -> None:
         assert mode == 0o600, oct(mode)
 
 
+def _real_api_connection_error():
+    """A genuine openai.APIConnectionError, or None if openai/httpx aren't installed."""
+    try:
+        import httpx
+        from openai import APIConnectionError
+    except Exception:
+        return None
+    return APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"))
+
+
+def test_egress_detection_is_sdk_typed() -> None:
+    # deterministic: a non-OpenAI exception is never an egress error
+    assert T._is_egress_error(ValueError("boom")) is False
+    assert T._is_egress_error(RuntimeError("invalid api key")) is False
+    exc = _real_api_connection_error()
+    if exc is None:
+        print("  (skipped openai-typed assertion: openai not installed)")
+        return
+    assert T._is_egress_error(exc) is True  # the real SDK connection type
+
+
 def test_no_egress_gives_actionable_error() -> None:
+    exc = _real_api_connection_error()
+    if exc is None:
+        print("  (skipped: openai not installed)")
+        return
     real_sleep = T.time.sleep; T.time.sleep = lambda s: None
     try:
-        class APIConnectionError(Exception):
-            pass
         class Boom(FakeClient):
             def __init__(self):
                 super().__init__()
                 class C:
                     def create(self2, **kw):
-                        raise APIConnectionError("Connection error.")
+                        raise exc
                 self.chat = _Chat(C())
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
             _write(p, ["note"], [{"note": "hola"}])
             try:
                 T.translate_csv(str(p), ["note"], "en", "es", str(out), client=Boom(), confirm=True)
-            except RuntimeError as exc:
-                m = str(exc)
+            except RuntimeError as e:
+                m = str(e)
                 assert "api.openai.com" in m and "egress" in m.lower(), m
-                assert "hola" not in m  # no source text leaked
+                assert "hola" not in m
                 return
             raise AssertionError("expected an egress RuntimeError")
     finally:
         T.time.sleep = real_sleep
-
-
-def test_is_connection_error_classifies() -> None:
-    class APITimeoutError(Exception): pass
-    assert T._is_connection_error(APITimeoutError("x"))
-    assert T._is_connection_error(Exception("Connection error."))
-    assert T._is_connection_error(Exception("Failed to establish a new connection"))
-    assert not T._is_connection_error(Exception("invalid api key"))
 
 
 def test_glossary_is_word_bounded() -> None:

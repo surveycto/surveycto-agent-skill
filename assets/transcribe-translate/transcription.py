@@ -104,18 +104,19 @@ _NO_EGRESS_MSG = (
 )
 
 
-def _is_connection_error(exc: Exception) -> bool:
-    """True if the error looks like a blocked/failed network connection (so we can
-    give actionable egress guidance). Matched on class name and generic phrases."""
-    name = type(exc).__name__.lower()
-    if any(k in name for k in ("connection", "timeout", "connecterror")):
-        return True
-    msg = str(exc).lower()
-    return any(s in msg for s in (
-        "connection error", "failed to establish", "getaddrinfo",
-        "name or service not known", "temporary failure in name resolution",
-        "network is unreachable", "connection refused", "no route to host",
-    ))
+def _is_egress_error(exc: Exception) -> bool:
+    """True iff ``exc`` is the OpenAI SDK's connection-failure type.
+
+    Deterministic: keyed to the SDK's documented exception contract, not message
+    text. ``openai.APIConnectionError`` is raised for any failure to reach the API;
+    ``APITimeoutError`` subclasses it, so one isinstance check covers a blocked
+    egress without misclassifying API/auth errors that did reach the server.
+    """
+    try:
+        from openai import APIConnectionError  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 - openai not importable -> cannot be this type
+        return False
+    return isinstance(exc, APIConnectionError)
 
 
 def _audio_duration_seconds(path: str) -> float | None:
@@ -458,7 +459,7 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                     except Exception as exc:
                         # a blocked network is common in locked-down environments;
                         # give actionable egress guidance rather than an opaque name
-                        if _is_connection_error(exc):
+                        if _is_egress_error(exc):
                             raise TranscriptionError(_NO_EGRESS_MSG) from None
                         # sanitize: an API/library error could echo request content
                         raise TranscriptionError(

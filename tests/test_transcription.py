@@ -119,14 +119,33 @@ def test_confirm_gate() -> None:
         raise AssertionError("expected PermissionError without confirm")
 
 
+def test_egress_detection_is_sdk_typed() -> None:
+    # deterministic: only the OpenAI SDK connection type counts as an egress error
+    assert X._is_egress_error(OSError("boom")) is False
+    try:
+        import httpx
+        from openai import APIConnectionError
+    except Exception:
+        print("  (skipped openai-typed assertion: openai not installed)")
+        return
+    exc = APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1/audio/transcriptions"))
+    assert X._is_egress_error(exc) is True
+
+
 def test_no_egress_gives_actionable_error() -> None:
+    try:
+        import httpx
+        from openai import APIConnectionError
+    except Exception:
+        print("  (skipped: openai not installed)")
+        return
+    exc = APIConnectionError(request=httpx.Request("POST", "https://api.openai.com/v1/audio/transcriptions"))
     orig = X._audio_duration_seconds
     X._audio_duration_seconds = lambda p: 10.0
     try:
         with tempfile.TemporaryDirectory() as d:
             a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
-            boom = FakeClient(lambda data: (_ for _ in ()).throw(
-                ConnectionError("Failed to establish a new connection")))
+            boom = FakeClient(lambda data: (_ for _ in ()).throw(exc))
             s = X.transcribe_files([str(a)], str(out), confirm=True, client=boom)
             assert s["failed"] == 1, s
             status = _read(out)[0]["status"]
