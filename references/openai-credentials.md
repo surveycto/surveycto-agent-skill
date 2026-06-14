@@ -63,7 +63,7 @@ contain key material.
 Check setup state without revealing the key:
 
 ```
-python3 openai_auth.py status      # prints the source and a masked key only
+python3 assets/transcribe-translate/openai_auth.py status      # prints the source and a masked key only
 ```
 
 ## COACHING THE USER
@@ -99,7 +99,7 @@ in the working folder:
 1. Write the key file for them:
 
    ```
-   python3 openai_auth.py template        # writes ./openai-key.txt with a placeholder
+   python3 assets/transcribe-translate/openai_auth.py template        # writes ./openai-key.txt with a placeholder
    ```
 
 2. Tell the user, in chat:
@@ -112,7 +112,7 @@ in the working folder:
    deletes the file; it never prints the key:
 
    ```
-   python3 openai_auth.py import-file openai-key.txt
+   python3 assets/transcribe-translate/openai_auth.py import-file openai-key.txt
    ```
 
 Do not open, read, or `cat` `openai-key.txt` yourself; only run the import
@@ -133,12 +133,12 @@ Run the shipped bootstrap once. It creates an isolated environment and installs
 `openai` into it:
 
 ```
-python3 setup_env.py            # translation + transcription
+python3 assets/transcribe-translate/setup_env.py            # translation + transcription
 ```
 
 It prints the environment's Python interpreter on the last line as
 `VENV_PYTHON=<path>`. Use that interpreter to run every module from here on, for
-example `<path> translation.py ...` and `<path> transcription.py ...`.
+example `<path> assets/transcribe-translate/translation.py ...` and `<path> assets/transcribe-translate/transcription.py ...`.
 
 Do NOT rely on a bare `pip install openai`. On modern macOS (Homebrew) and recent
 Debian/Ubuntu, the system Python is "externally managed" (PEP 668) and a direct
@@ -170,12 +170,9 @@ the key. How to allow it depends on the plan:
 - **Team / Enterprise:** outbound network is admin-controlled and the default is
   "package managers only" (PyPI/npm/GitHub), which does **not** reach third-party
   APIs. A workspace **admin** must, under **Organization settings > Capabilities**,
-  either allowlist the specific domain(s) or enable "all domains". Allowlist:
-  - `api.openai.com` (required for cloud translation and transcription).
-  - `huggingface.co` and `*.hf.co` / `cdn-lfs.huggingface.co` only if using the
-    on-device models (their weights download once from Hugging Face; after that
-    they run offline). A fully air-gapped machine cannot download them and would
-    need the models pre-provisioned.
+  allowlist **`api.openai.com`** (required for translation and transcription) or
+  enable "all domains". The "package managers only" default is enough to install
+  `openai` from PyPI but not to call the API.
 
 Tell the user which of these applies and exactly what to enable; the cost gate
 and key are useless if the request can't leave the environment. `setup_env.py`
@@ -194,8 +191,8 @@ they are spending.
 The user (or you) can see the running total at any time:
 
 ```
-python3 usage_ledger.py show     # prints cumulative OpenAI spend, by operation
-python3 usage_ledger.py reset    # clears the history
+python3 assets/transcribe-translate/usage_ledger.py show     # prints cumulative OpenAI spend, by operation
+python3 assets/transcribe-translate/usage_ledger.py reset    # clears the history
 ```
 
 ## Security checklist for generated scripts

@@ -71,7 +71,7 @@ Built in:
 1. **Confirm credentials and environment.** If a "no OpenAI API key configured"
    error appears, switch to the coaching in
    [`openai-credentials.md`](openai-credentials.md). Make sure the client library
-   is installed by running the bootstrap once (`python3 setup_env.py`); it prints
+   is installed by running the bootstrap once (`python3 assets/transcribe-translate/setup_env.py`); it prints
    a `VENV_PYTHON=<path>` line. Run the module with that interpreter. Do not rely
    on a bare `pip install openai`, which fails with
    `externally-managed-environment` (PEP 668) on modern macOS and Debian/Ubuntu.
@@ -104,9 +104,9 @@ below is that path, and `translation.py` lives in the skill's
 ```bash
 PY=<the VENV_PYTHON path from setup_env.py>
 # 1. estimate: shows cells_to_translate, estimated_usd_display, pii_warning -> show the user, get confirmation
-"$PY" translation.py estimate responses.csv --columns q_open,comments --target en
+"$PY" assets/transcribe-translate/translation.py estimate responses.csv --columns q_open,comments --target en
 # 2. translate (only after confirmation). Omit --source to auto-detect mixed-language columns.
-"$PY" translation.py translate responses.csv --columns q_open,comments \
+"$PY" assets/transcribe-translate/translation.py translate responses.csv --columns q_open,comments \
     --target en --output responses_en.csv --cache translation-cache.db --confirm
 ```
 
@@ -143,9 +143,10 @@ enumerator,encuestador,enquêteur
 ## Caching and re-runs
 
 Pass a `cache_path` (e.g. `translation-cache.db`) so re-translating a refreshed
-export only pays for changed cells. The cache contains source text and
-translations, so it is sensitive: keep it with the user's data, not in a shared or
-version-controlled location.
+export only pays for changed cells. The cache stores the translated text keyed by
+a hash of the source (not the source text itself); the translations can still be
+sensitive, so keep it with the user's data, not in a shared or version-controlled
+location (the skill gitignores it and sets it to 0600).
 
 ## Quality reminder
 

@@ -9,20 +9,23 @@ emitted.
 
 Resolution order:
 
-1. ``OPENAI_API_KEY`` environment variable (OpenAI's standard convention).
+1. ``OPENAI_API_KEY`` environment variable (OpenAI's standard convention; how an
+   advanced/local user who already has the key in their environment supplies it).
 2. ``~/.surveycto-skill/openai-config.json`` (key stored there, file chmod 600).
 3. Raise a clear error pointing to the setup coaching, with NO key material.
 
-Usage (Python)::
+Preferred onboarding is a file handoff, so the key never appears in chat (where
+it would be logged) or on a command line:
+
+    python3 openai_auth.py template            # write openai-key.txt for the user to edit
+    # user pastes their key into that file and saves it, then:
+    python3 openai_auth.py import-file openai-key.txt   # store chmod 600, delete file
+    python3 openai_auth.py status              # prints source + masked key only
+
+In a script, point the SDK at the resolved key without revealing it::
 
     import openai_auth
-    openai_auth.save_api_key("sk-...")     # one-time setup; never printed back
-    openai_auth.configure_openai()         # sets OPENAI_API_KEY for the SDK
-
-Usage (CLI)::
-
-    python3 openai_auth.py set sk-...        # stores the key (chmod 600)
-    python3 openai_auth.py status            # prints source + masked key only
+    openai_auth.configure_openai()             # sets OPENAI_API_KEY for the SDK
 
 See ``references/openai-credentials.md`` for the agent mandate and the
 user-coaching walkthrough.
@@ -222,8 +225,8 @@ _USAGE = (
     "                                            default ./openai-key.txt)\n"
     "  python3 openai_auth.py import-file PATH   (import the edited key file, then delete it)\n"
     "  python3 openai_auth.py status            (show source + masked key)\n"
-    "  python3 openai_auth.py set sk-...        (store a key passed as an argument;\n"
-    "                                            avoid in Cowork/shared shells - it is logged)"
+    "(An advanced/local user who already has the key can instead set OPENAI_API_KEY\n"
+    " in the environment; configure_openai() honors it first.)"
 )
 
 def _main(argv: list[str]) -> int:
@@ -247,15 +250,6 @@ def _main(argv: list[str]) -> int:
             return 1
         print(f"Imported and stored the key (masked: {masked}). The key file was "
               "removed. The key was never displayed.")
-        return 0
-    if len(argv) >= 2 and argv[0] == "set":
-        try:
-            save_api_key(argv[1])
-        except ValueError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        st = credentials_status()
-        print(f"OpenAI API key stored in {CONFIG_PATH} (masked: {st['masked_key']}).")
         return 0
     if argv and argv[0] == "status":
         st = credentials_status()

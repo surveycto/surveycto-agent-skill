@@ -19,9 +19,11 @@ Design:
   a mismatch is retried (up to the retry budget), then fails loud, so the model
   can never silently drop or merge cells.
 * De-duplication: identical source strings are translated once per run.
-* Caching: with a ``cache_path``, raw translations are memoized (keyed on source
-  language, target language, model, and a hash of the source text) so re-runs are
-  cheap. The cache holds source text (sensitive); it is gitignored by the skill.
+* Caching: with a ``cache_path``, raw translations are memoized so re-runs are
+  cheap. The row stores the translated text keyed by (source language, target
+  language, model, hash of the source text) -- the source text itself is not
+  stored, only its hash. The translations can still be sensitive, so the cache is
+  gitignored and chmod 600.
 * Skip-list: empty cells, pure numbers, single letters, and common survey codes
   (N/A, 999, -99, ...) are never sent.
 * Preserve originals: a ``<column>_<target_language>`` column is added next to
@@ -226,8 +228,9 @@ def _text_hash(text: str) -> str:
 
 
 def _restrict_cache_permissions(cache_path: str) -> None:
-    """Make the cache readable only by its owner. It holds source text (often
-    sensitive), so it gets the same 0600 treatment as the API-key config."""
+    """Make the cache readable only by its owner. It holds the translated text
+    (keyed by a hash of the source, not the source itself), which can still be
+    sensitive, so it gets the same 0600 treatment as the API-key config."""
     try:
         os.chmod(cache_path, 0o600)
     except OSError:
@@ -383,14 +386,18 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
     columns = list(dict.fromkeys(columns))
     _require_columns(fieldnames, columns)
 
-    out_fieldnames = list(fieldnames)
     out_columns: dict[str, str] = {}
     for col in columns:
         oc = f"{col}_{target_language}"
-        if oc in out_fieldnames:
+        if oc in fieldnames:
             raise ValueError(f"Output column '{oc}' already exists. Refusing to overwrite.")
         out_columns[col] = oc
-        out_fieldnames.append(oc)
+    # place each translated column immediately after its source column
+    out_fieldnames: list[str] = []
+    for name in fieldnames:
+        out_fieldnames.append(name)
+        if name in out_columns:
+            out_fieldnames.append(out_columns[name])
 
     glossary = _load_glossary(glossary_path, target_language) if glossary_path else None
 

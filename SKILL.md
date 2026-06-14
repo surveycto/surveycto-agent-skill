@@ -260,10 +260,6 @@ The template provides:
 
 Adding a language, updating translations after the source changes, or verifying existing translations is its own workflow. **Read [`references/translation.md`](references/translation.md) before starting** — don't improvise from the column-convention sketch in [`references/xlsform.md`](references/xlsform.md).
 
-#### Workflow: translate or transcribe exported data (OpenAI)
-
-Translating collected data (open-ended responses, enumerator notes, transcriptions) or transcribing audio captures (audio audits, voice responses) from an export is distinct from form-label translation: the data is high-volume and sensitive, so it must never enter the conversation or logs. A shipped script sends it to OpenAI, chunking long audio automatically, and writes the result to a CSV. The credential is an OpenAI API key whose value you must never print or echo. **Read [`references/openai-credentials.md`](references/openai-credentials.md) first, then [`references/user-data-translation.md`](references/user-data-translation.md) (translation) or [`references/audio-transcription.md`](references/audio-transcription.md) (audio) before starting.** Always estimate cost and get explicit user confirmation before any paid API call.
-
 #### Workflow: convert a form from another platform
 
 Converting a form definition exported from another data collection platform — KoboToolbox or ODK (XLSForm `.xlsx`), CommCare (XForms `.xml`), Qualtrics (`.qsf` JSON), or anything else — into a SurveyCTO XLSForm is its own workflow. Note that the conversion is **best-effort and agent-driven**, and the SurveyCTO MCP XLSForm tools work **only on SurveyCTO-shaped XLSForms** (do not point them at the source file). **Read [`references/form-conversion.md`](references/form-conversion.md) before starting**, then load the matching platform-specific reference (`form-conversion-qualtrics.md`, `form-conversion-kobo.md`, `form-conversion-odk.md`, `form-conversion-commcare.md`) if one exists for the source platform; for platforms without a dedicated reference, the base workflow still applies.
@@ -460,6 +456,12 @@ In the dataset XML, add a `<dataLink>` with:
 | Plug-in field doesn't appear / `custom-<name>` ignored | Plug-in `.fieldplugin.zip` not attached, name mismatch, or unsupported field type | Re-attach the zip; confirm the `custom-<name>` token matches the **`.fieldplugin.zip` filename stem** (e.g. `myplugin.fieldplugin.zip` → `custom-myplugin`), not `manifest.name`; plug-ins only work on `text`/`integer`/`decimal`/`select_one`/`select_multiple` |
 | Plug-in answer not saved | `setAnswer` not called, or `select_multiple` value joined with commas | Wire input events to `setAnswer(value)`; for `select_multiple`, pass a **space**-separated list |
 | Plug-in attachments 404 at runtime | Files placed in subdirectories inside the zip | Flatten the zip — every file at the root, no duplicate basenames |
+
+## Translating and transcribing exported data (OpenAI)
+
+Separate from authoring forms: this skill can also **translate** open-ended response/comment columns in an exported CSV, and **transcribe** audio captures (audio audits, voice responses), via OpenAI. The data is high-volume and sensitive, so it must never enter the conversation or logs — a shipped script (`assets/transcribe-translate/`) sends it to OpenAI, chunking long audio automatically, and writes the result to a CSV. It needs an OpenAI API key (handled so its value is never printed) and outbound network access to `api.openai.com`.
+
+**Read [`references/openai-credentials.md`](references/openai-credentials.md) first** (key onboarding via a file handoff — never via chat — and how to enable network egress), then [`references/user-data-translation.md`](references/user-data-translation.md) for translation or [`references/audio-transcription.md`](references/audio-transcription.md) for audio. Always run the cost estimate and get explicit user confirmation before any paid API call, and report the actual and cumulative spend after each run.
 
 ## References
 

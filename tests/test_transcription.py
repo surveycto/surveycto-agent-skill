@@ -42,10 +42,11 @@ class BadRequestError(Exception):
 class _Resp:
     def __init__(self, text): self.text = text
 class _Transcriptions:
-    def __init__(self, handler): self._h = handler; self.calls = []
-    def create(self, model, file):
+    def __init__(self, handler): self._h = handler; self.calls = []; self.languages = []
+    def create(self, model, file, language=None):
         data = file.read()
         self.calls.append(len(data))
+        self.languages.append(language)
         return _Resp(self._h(data))
 class _Audio:
     def __init__(self, tr): self.transcriptions = tr
@@ -229,11 +230,13 @@ def test_adaptive_split_succeeds_on_too_large() -> None:
         return f"<{len(data)}>"
     try:
         c = FakeClient(handler)
-        text = X._transcribe_segment("src", 0.0, 100.0, "gpt-4o-mini-transcribe", c)
+        text, submitted = X._transcribe_segment("src", 0.0, 100.0, "gpt-4o-mini-transcribe", c)
         # larger calls were the failed attempts that triggered splitting; the
         # leaves that actually produced text are within the limit
         assert text and ("<25>" in text or "<26>" in text), text
         assert any(n <= THRESH for n in c.transcriptions.calls), c.transcriptions.calls
+        # submitted seconds include the overlap re-sent at each seam -> > 100
+        assert submitted > 100.0, submitted
     finally:
         X._extract_chunk = orig_ex
 
@@ -399,6 +402,43 @@ def test_cache_file_is_chmod_600() -> None:
             assert mode == 0o600, oct(mode)
     finally:
         X._audio_duration_seconds = orig
+
+
+def test_language_hint_forwarded_to_api() -> None:
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 30.0
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x")
+            c = FakeClient()
+            X.transcribe_files([str(a)], str(Path(d) / "o.csv"), confirm=True,
+                               client=c, language="es")
+            assert c.transcriptions.languages == ["es"], c.transcriptions.languages
+            c2 = FakeClient()
+            X.transcribe_files([str(a)], str(Path(d) / "o2.csv"), confirm=True, client=c2)
+            assert c2.transcriptions.languages == [None], c2.transcriptions.languages  # auto-detect
+    finally:
+        X._audio_duration_seconds = orig
+
+
+def test_chunked_billing_includes_overlap() -> None:
+    # force chunking (dur > gpt-4o cap, window capped at 600s) and confirm the
+    # billed amount reflects the audio actually submitted (overlap), not just dur
+    orig_d = X._audio_duration_seconds; orig_g = X.os.path.getsize; orig_ex = X._extract_chunk
+    X._audio_duration_seconds = lambda p: 1800.0
+    X.os.path.getsize = lambda p: 5_000_000
+    X._extract_chunk = lambda src, start, length, dst: open(dst, "wb").write(b"x" * 100)
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            s = X.transcribe_files([str(a)], str(out), confirm=True, client=FakeClient())
+            file_only = round(X._billed_minutes(1800.0) * 0.003, 6)  # billing on dur alone
+            assert s["transcribed"] == 1, s
+            assert s["actual_usd"] > file_only, (s["actual_usd"], file_only)  # overlap counted
+            assert s["actual_usd"] < file_only * 1.05, s  # but only slightly (a few seams)
+    finally:
+        X._audio_duration_seconds = orig_d; X.os.path.getsize = orig_g; X._extract_chunk = orig_ex
 
 
 def main() -> int:

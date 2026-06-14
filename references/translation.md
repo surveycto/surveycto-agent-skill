@@ -17,7 +17,7 @@ Read this when the user wants to:
 
 Out of scope for this primer:
 
-- Translating data in *submissions* (response text, enumerator comments). That involves much larger volumes, sensitive respondent content, and an external translation API; it is a separate workflow.
+- Translating data in *submissions* (response text, enumerator comments). That involves much larger volumes, sensitive respondent content, and an external translation API; it is a separate workflow — see [`user-data-translation.md`](user-data-translation.md) (and [`openai-credentials.md`](openai-credentials.md) for the key setup).
 - Translating server dataset XML files, Data Explorer workbooks, or field plug-in UI strings — handled (when needed) in their own primers.
 - Generating translated audio/image media. The agent cannot produce these; the user provides them.
 

@@ -27,18 +27,18 @@ import and their logic is unit-testable offline.
 
 Both workflows report `actual_usd_display` (this run) and
 `total_spend_usd_display` (cumulative) so the user is always told what they spent;
-see `python3 usage_ledger.py show`.
+see `python3 assets/transcribe-translate/usage_ledger.py show`.
 
 Install with the shipped bootstrap (run once):
 
 ```
-python3 setup_env.py            # translation + transcription
+python3 assets/transcribe-translate/setup_env.py            # translation + transcription
 ```
 
 It creates an isolated environment at `~/.surveycto-skill/venv`, installs the
 dependencies there, and prints the interpreter path on the last line as
 `VENV_PYTHON=<path>`. Run every module with that interpreter (e.g.
-`<path> translation.py ...`). This avoids the PEP 668
+`<path> assets/transcribe-translate/translation.py ...`). This avoids the PEP 668
 `externally-managed-environment` error that a bare `pip install openai` hits on
 modern macOS (Homebrew) and recent Debian/Ubuntu. The script is idempotent.
 
@@ -62,17 +62,17 @@ as `PY` below; plain `python3` will not have `openai` installed.
 ```bash
 PY=<the VENV_PYTHON path from setup_env.py>
 # translate (estimate first; --confirm only after showing cost + PII; omit --source to auto-detect)
-"$PY" translation.py estimate data.csv --columns notes --target en
-"$PY" translation.py translate data.csv --columns notes --target en \
+"$PY" assets/transcribe-translate/translation.py estimate data.csv --columns notes --target en
+"$PY" assets/transcribe-translate/translation.py translate data.csv --columns notes --target en \
     --output data_en.csv --cache translation-cache.db --confirm
 
 # transcribe (needs ffmpeg on PATH)
-"$PY" transcription.py estimate a.mp3
-"$PY" transcription.py transcribe a.mp3 --output out.csv \
+"$PY" assets/transcribe-translate/transcription.py estimate a.mp3
+"$PY" assets/transcribe-translate/transcription.py transcribe a.mp3 --output out.csv \
     --cache transcription-cache.db --confirm
 ```
 
-Run `"$PY" translation.py --help` or `"$PY" transcription.py --help` for all flags
+Run `"$PY" assets/transcribe-translate/translation.py --help` or `"$PY" assets/transcribe-translate/transcription.py --help` for all flags
 and examples. The same functions are importable (`import translation` /
 `transcription`, after `openai_auth.configure_openai()`) if you prefer a script.
 
@@ -93,6 +93,7 @@ python3 tests/test_openai_auth.py
 python3 tests/test_translation.py
 python3 tests/test_transcription.py
 python3 tests/test_setup_env.py
+python3 tests/test_usage_ledger.py
 ```
 
 They use injected fake clients, so they exercise the surrounding logic

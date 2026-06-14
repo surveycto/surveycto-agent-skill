@@ -253,13 +253,21 @@ def _is_too_large_error(exc: Exception) -> bool:
     return getattr(exc, "status_code", None) == 413
 
 
-def _transcribe_openai_file(path: str, model_id: str, client=None) -> str:
-    """Transcribe one already-compliant file via the OpenAI audio API."""
+def _transcribe_openai_file(path: str, model_id: str, client=None,
+                            language: str | None = None) -> str:
+    """Transcribe one already-compliant file via the OpenAI audio API.
+
+    ``language`` is an optional ISO-639-1 hint forwarded to the API to improve
+    accuracy/latency; when omitted the model auto-detects the spoken language.
+    """
     if client is None:
         from openai import OpenAI  # noqa: PLC0415
         client = OpenAI()
     with open(path, "rb") as fh:
-        resp = client.audio.transcriptions.create(model=model_id, file=fh)
+        kwargs = {"model": model_id, "file": fh}
+        if language:
+            kwargs["language"] = language
+        resp = client.audio.transcriptions.create(**kwargs)
     return getattr(resp, "text", "") or ""
 
 
@@ -277,15 +285,21 @@ def _fits_whole(path: str, spec: dict) -> bool:
 
 
 def _transcribe_segment(src: str, start: float, length: float, model_id: str,
-                        client, depth: int = 0) -> str:
+                        client, depth: int = 0,
+                        language: str | None = None) -> tuple[str, float]:
     """Transcribe a [start, start+length] segment, splitting recursively if the
-    model rejects it as too large (adapts to dense audio / token limits)."""
+    model rejects it as too large (adapts to dense audio / token limits).
+
+    Returns ``(text, submitted_seconds)`` where ``submitted_seconds`` is the audio
+    duration actually sent to OpenAI (the sum across recursive splits, so it
+    includes the ~1s overlap re-sent at each seam). This is what gets billed.
+    """
     with tempfile.TemporaryDirectory() as d:
         seg = os.path.join(d, "seg.mp3")
         _extract_chunk(src, start, length, seg)
         if os.path.getsize(seg) <= _MAX_BYTES:
             try:
-                return _transcribe_openai_file(seg, model_id, client)
+                return _transcribe_openai_file(seg, model_id, client, language), length
             except Exception as exc:
                 if not _is_too_large_error(exc):
                     raise
@@ -295,26 +309,27 @@ def _transcribe_segment(src: str, start: float, length: float, model_id: str,
                 "audio segment is too large to transcribe even after splitting")
     half = length / 2
     overlap = 1.0
-    left = _transcribe_segment(src, start, half, model_id, client, depth + 1)
-    right = _transcribe_segment(src, max(0.0, start + half - overlap),
-                                length - half + overlap, model_id, client, depth + 1)
-    return _stitch(left, right)
+    lt, ls = _transcribe_segment(src, start, half, model_id, client, depth + 1, language)
+    rt, rs = _transcribe_segment(src, max(0.0, start + half - overlap),
+                                 length - half + overlap, model_id, client, depth + 1, language)
+    return _stitch(lt, rt), ls + rs
 
 
-def _transcribe_one(path: str, spec: dict, client) -> str:
-    """Transcribe one file: single-request, or windowed + adaptive chunks."""
+def _transcribe_one(path: str, spec: dict, client, dur: float,
+                    language: str | None = None) -> tuple[str, float]:
+    """Transcribe one file: single-request, or windowed + adaptive chunks.
+
+    ``dur`` is the file's measured duration (the caller requires it). Returns
+    ``(text, submitted_seconds)`` -- the total audio actually sent to OpenAI,
+    which for a chunked file exceeds ``dur`` by the per-seam overlap.
+    """
     if _fits_whole(path, spec):
         try:
-            return _transcribe_openai_file(path, spec["id"], client)
+            return _transcribe_openai_file(path, spec["id"], client, language), dur
         except Exception as exc:
             if not _is_too_large_error(exc):
                 raise
             # otherwise fall through to chunking
-    dur = _audio_duration_seconds(path)
-    if dur is None:
-        raise TranscriptionError(
-            "audio needs splitting but its duration could not be measured "
-            "(install ffmpeg/ffprobe).")
     size = os.path.getsize(path)
     bytes_per_sec = size / dur if dur > 0 else 0
     window = 0.9 * _MAX_BYTES / bytes_per_sec if bytes_per_sec > 0 else dur
@@ -323,19 +338,22 @@ def _transcribe_one(path: str, spec: dict, client) -> str:
         window = min(window, md)
     window = max(60.0, window)
     parts: list[str] = []
+    submitted = 0.0
     overlap = 1.0
     start = 0.0
     while start < dur:
         s = start if not parts else max(0.0, start - overlap)
         length = min(window, dur - s)
-        parts.append(_transcribe_segment(path, s, length, spec["id"], client))
+        ptext, psub = _transcribe_segment(path, s, length, spec["id"], client, language=language)
+        parts.append(ptext)
+        submitted += psub
         start = s + length
         if length <= overlap:
             break
     stitched = ""
     for p in parts:
         stitched = _stitch(stitched, p)
-    return stitched
+    return stitched, submitted
 
 
 # ---- cache ----------------------------------------------------------------
@@ -379,7 +397,7 @@ def _file_hash(path: str) -> str:
 def transcribe_files(audio_paths: list[str], output_path: str,
                      model: str | None = None,
                      cache_path: str | None = None, confirm: bool = False,
-                     client=None) -> dict:
+                     client=None, language: str | None = None) -> dict:
     """Transcribe audio files and write a CSV of results.
 
     Output columns: ``file``, ``transcript``, ``backend``, ``duration_seconds``,
@@ -392,6 +410,8 @@ def transcribe_files(audio_paths: list[str], output_path: str,
     :param cache_path: Optional SQLite cache path.
     :param confirm: Must be ``True`` to run (cost gate).
     :param client: Optional injected client (testing).
+    :param language: Optional ISO-639-1 hint (e.g. ``en``) forwarded to OpenAI to
+        improve accuracy/latency; omit to let the model auto-detect.
     :returns: Dict with ``transcribed``, ``cached``, ``failed``, ``backend``,
         ``output_path``.
     :raises PermissionError: If ``confirm`` is not ``True``.
@@ -442,7 +462,7 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                             "transcription so the cost can be reported. Install ffmpeg "
                             "(it provides ffprobe) and retry.")
                     try:
-                        text = _transcribe_one(path, spec, client)
+                        text, submitted = _transcribe_one(path, spec, client, dur, language)
                     except TranscriptionError:
                         # message is safe by construction; surface as-is
                         raise
@@ -459,7 +479,9 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                     row["duration_seconds"] = dur
                     stats["transcribed"] += 1
                     fresh = True
-                    billed_seconds += dur
+                    # bill on the audio actually submitted (includes chunk overlap),
+                    # not just the file duration
+                    billed_seconds += submitted
                     if cache_conn is not None:
                         cache_conn.execute(
                             "INSERT OR REPLACE INTO transcripts VALUES (?,?,?)",
@@ -491,10 +513,10 @@ def transcribe_files(audio_paths: list[str], output_path: str,
     stats["backend"] = backend
     stats["output_path"] = output_path
 
-    # actual spend: bill on the audio minutes actually sent to OpenAI this run
-    # (cache hits are free and record nothing). Billed on each file's measured
-    # duration; a chunked long file re-sends a ~1s overlap per seam, so this is a
-    # close lower bound on true billed minutes, not exact.
+    # actual spend: bill on the audio actually submitted to OpenAI this run
+    # (cache hits are free and record nothing). billed_seconds is the sum of the
+    # durations actually sent, so for a chunked file it already includes the
+    # per-seam overlap -- it is the real submitted duration, not a lower bound.
     if billed_seconds > 0:
         actual_usd = _billed_minutes(billed_seconds) * spec["usd_per_min"]
         units = f"{billed_seconds / 60:.1f} audio-min"
@@ -532,6 +554,8 @@ def _main(argv: list[str]) -> int:
     pt.add_argument("--model", default=None,
                     help="fast (default, gpt-4o-mini-transcribe) | accurate | whisper | model id")
     pt.add_argument("--cache", default=None, help="optional SQLite cache path so re-runs are free")
+    pt.add_argument("--language", default=None,
+                    help="optional ISO-639-1 hint (e.g. en) to improve accuracy; omit to auto-detect")
     pt.add_argument("--confirm", action="store_true", help="required: confirms you accepted the cost/PII")
     args = p.parse_args(argv)
 
@@ -547,7 +571,7 @@ def _main(argv: list[str]) -> int:
         openai_auth.configure_openai()
         print(json.dumps(transcribe_files(
             args.audio_paths, args.output, model=args.model,
-            cache_path=args.cache, confirm=True), indent=2))
+            cache_path=args.cache, confirm=True, language=args.language), indent=2))
         return 0
     return 2
 

@@ -102,6 +102,19 @@ def test_translate_basic_skip_columns() -> None:
         assert r[0]["note"] == "hola"  # original preserved
 
 
+def test_output_column_inserted_next_to_source() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        # two source columns among others; each _en goes right after its source
+        _write(p, ["id", "note", "extra", "comment"],
+               [{"id": "1", "note": "hola", "extra": "x", "comment": "adios"}])
+        T.translate_csv(str(p), ["note", "comment"], "en", "es", str(out),
+                        client=FakeClient(), confirm=True)
+        with open(out, newline="", encoding="utf-8") as f:
+            header = next(csv.reader(f))
+        assert header == ["id", "note", "note_en", "extra", "comment", "comment_en"], header
+
+
 def test_dedup_one_unique_sent() -> None:
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "x.csv"; out = Path(d) / "o.csv"

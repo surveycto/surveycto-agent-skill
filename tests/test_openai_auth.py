@@ -127,14 +127,19 @@ def test_status_and_mask_never_reveal_key() -> None:
 def test_cli_never_prints_raw_key() -> None:
     with tempfile.TemporaryDirectory() as d:
         _fresh(Path(d))
+        kf = Path(d) / "openai-key.txt"
         out = io.StringIO()
         err = io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            auth._main(["set", _FAKE])
+            auth._main(["template", str(kf)])
+            kf.write_text(_FAKE + "\n", encoding="utf-8")   # user edits the file
+            auth._main(["import-file", str(kf)])
             auth._main(["status"])
         combined = out.getvalue() + err.getvalue()
         assert _FAKE not in combined, "raw key leaked to CLI output"
         assert "THISisAfake" not in combined
+        # and there is no longer a `set` subcommand that takes the key on argv
+        assert auth._main(["set", _FAKE]) == 2  # unknown command -> usage
 
 
 def test_config_file_is_chmod_600() -> None:

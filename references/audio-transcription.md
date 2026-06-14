@@ -51,8 +51,10 @@ recordings):
 Practical guidance: the default (`fast`) works for any length via chunking. For
 very long or very dense recordings where you want the fewest seams, `whisper` is
 the simplest (one request for any file under 25 MB). For best accuracy on hard audio, try
-`accurate`. The chunking is lossless (it over-captures at seams rather than
-dropping); a 1-3 word duplication can appear at a seam.
+`accurate`. The chunking uses a small overlap at each seam to reduce the chance a
+word is cut at a boundary; the overlap's duplicated words are then removed when
+the pieces are stitched. That de-duplication can, rarely, collapse a word that was
+genuinely repeated right at a seam (a stutter) -- see the quality reminder.
 
 ## What the module gives you
 
@@ -60,8 +62,9 @@ dropping); a 1-3 word duplication can appear at a seam.
   USD cost, files whose duration could not be read in `unknown_duration`, and the
   PII warning.
 - `transcribe_files(audio_paths, output_path, model=None, cache_path=None,
-  confirm=False)` transcribes a batch and writes a CSV (`file`, `transcript`,
-  `backend`, `duration_seconds`, `status`).
+  confirm=False, language=None)` transcribes a batch and writes a CSV (`file`,
+  `transcript`, `backend`, `duration_seconds`, `status`). `language` is an optional
+  ISO-639-1 hint; omit to auto-detect.
 
 Built in: a confirm-gate cost check, per-file failure isolation (a bad file gets
 an error status; the batch continues), caching (keyed on file bytes + model so
@@ -73,15 +76,16 @@ echoes audio content).
 1. **Confirm credentials and environment.** If "no OpenAI API key configured"
    appears, switch to the coaching in
    [`openai-credentials.md`](openai-credentials.md). Install the client library by
-   running the bootstrap once (`python3 setup_env.py`); it prints a
+   running the bootstrap once (`python3 assets/transcribe-translate/setup_env.py`); it prints a
    `VENV_PYTHON=<path>` line, and you run the module with that interpreter. Do not
    rely on a bare `pip install openai`, which fails with
    `externally-managed-environment` (PEP 668) on modern macOS and Debian/Ubuntu.
    Transcription also needs `ffmpeg` on PATH.
 2. **Collect the audio paths.** SurveyCTO audio-audit and voice-response files are
    usually in the media folder of an export.
-3. **Get the spoken language** if it matters (the models auto-detect; you can pass
-   a hint to whisper-1 if needed).
+3. **Spoken language is auto-detected** by default, so this is optional. If the
+   user knows the language and wants slightly better accuracy/latency, pass it as
+   an ISO-639-1 hint via `--language` (e.g. `--language sw`); omit it otherwise.
 4. **Estimate cost and show the PII warning.** Call `estimate_cost(...)`. Show the
    total duration, estimated USD cost, any `unknown_duration` files, and the
    privacy reminder that the audio is sent to OpenAI.
@@ -106,9 +110,9 @@ and ffmpeg/ffprobe must be on PATH.
 ```bash
 PY=<the VENV_PYTHON path from setup_env.py>
 # 1. estimate: shows known_seconds, estimated_usd_display, pii_warning -> show the user, get confirmation
-"$PY" transcription.py estimate audio/r1.mp3 audio/r2.mp3
+"$PY" assets/transcribe-translate/transcription.py estimate audio/r1.mp3 audio/r2.mp3
 # 2. transcribe (only after confirmation)
-"$PY" transcription.py transcribe audio/r1.mp3 audio/r2.mp3 \
+"$PY" assets/transcribe-translate/transcription.py transcribe audio/r1.mp3 audio/r2.mp3 \
     --output transcripts.csv --cache transcription-cache.db --confirm
 ```
 
