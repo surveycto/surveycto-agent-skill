@@ -52,9 +52,9 @@ long files). Install it with `brew install ffmpeg` (macOS),
 ## Model selection (cheapest is the default)
 
 - Translation: `--model cheap` (gpt-4.1-nano, default) or `better` (gpt-4o-mini), or a model id; or `--provider local` for on-device NLLB-200 (EXPERIMENT).
-  - Local translation (`--provider local`, EXPERIMENT): on-device NLLB-200 distilled-600M, no key/cost, text stays on the machine. Install with `python3 setup_env.py --local-translate` (pip-only: transformers, torch, sentencepiece, langdetect). Auto-detects the source language; needs ~3 GB RAM. Good on straightforward survey text, weaker on idiom; cloud remains the default and most accurate.
+  - Local translation (`--provider local`, EXPERIMENT): on-device NLLB-200 distilled-600M, no key/cost, text stays on the machine. Install with `python3 setup_env.py --local-translate` (pip-only: transformers, torch, sentencepiece, langdetect; Windows/Linux/macOS, any modern CPU). Auto-detects the source language; needs ~3 GB RAM. Good on straightforward survey text, weaker on idiom; cloud remains the default and most accurate.
 - Transcription: `--model fast` (gpt-4o-mini-transcribe, default), `accurate` (gpt-4o-transcribe), or `whisper` (whisper-1); or `--provider local` for on-device Whisper (faster-whisper).
-  - Local provider: no key/cost, audio stays on the machine, but needs a one-time model download (default `small` is ~464 MB) and local compute. Best on an NVIDIA GPU; works well on a recent multi-core CPU / Apple Silicon (CPU-only there, ~8-9x faster than realtime for `small`); use `tiny`/`base` on weak hardware. Run `python3 system_check.py` to detect the machine and get a recommended model. See `references/audio-transcription.md` for the model/size/RAM table and download-time estimates.
+  - Local provider: no key/cost, audio stays on the machine, but needs a one-time model download (default `small` is ~464 MB) and local compute. Runs on any modern CPU (Intel/AMD/Apple Silicon) on Windows/Linux/macOS; an NVIDIA GPU (CUDA) accelerates it and makes the larger models practical. Use `tiny`/`base` on weak hardware. Run `python3 system_check.py` to detect the machine and get a recommended model. See `references/audio-transcription.md` for the model/size/RAM table and download-time estimates.
 
 ## Quick use (CLI)
 

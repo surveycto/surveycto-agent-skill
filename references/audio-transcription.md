@@ -45,6 +45,12 @@ third party, offline/air-gapped work, or large back-catalogs where the per-minut
 cloud cost adds up. The trade-off is a one-time model download, local compute
 time, and slightly lower accuracy than the cloud models.
 
+Reassure the user about "on-device": the **first run downloads the model once
+from the internet** (Hugging Face), and a harmless "unauthenticated requests to
+the HF Hub / set a HF_TOKEN" notice may appear during that download. That is the
+model weights being fetched, not the audio. After the model is cached,
+transcription runs **fully offline, and the audio is never uploaded**.
+
 Local is not the default. When the user's policy requires on-device processing,
 pass `--provider local` on every transcription command; without it the default
 cloud path uploads to OpenAI. The estimate's `pii_warning` reflects the chosen
@@ -69,14 +75,17 @@ Silicon, which CTranslate2 does not GPU-accelerate) should use `small` by defaul
 If the machine is too weak for acceptable local quality, suggest the cloud
 provider instead.
 
-Hardware support (faster-whisper uses CTranslate2):
+Hardware support (faster-whisper uses CTranslate2). It runs on Windows, Linux,
+and macOS, on **any modern CPU** (Intel, AMD, or Apple Silicon); a GPU is optional:
 
-- NVIDIA GPU (CUDA): fastest; comfortably runs the larger models. Best supported.
-- Recent multi-core CPU, including Apple Silicon: works well on the default
-  `small` model. Note Apple Silicon runs CPU-only here (CTranslate2 has no Metal
-  backend), so the GPU is not used on a Mac.
-- Old/low-core CPUs or low RAM: usable with `tiny`/`base`, but slow; avoid the
-  larger models.
+- Any modern x86-64 CPU (Intel/AMD) on Windows or Linux, and Apple Silicon on
+  macOS: works on the default `small` model (CPU execution; this is the common
+  case and needs no GPU).
+- NVIDIA GPU (CUDA): fastest, and makes the larger models practical. The only
+  GPU acceleration CTranslate2 offers; Apple Silicon GPUs (Metal) are not used,
+  so a Mac runs on its CPU.
+- Old/low-core CPUs or low RAM (any platform): usable with `tiny`/`base`, but
+  slow; avoid the larger models.
 
 Models, download size, RAM, and measured CPU speed. The model is downloaded once
 and then cached under `~/.cache/huggingface`. The download size and "CPU time"
