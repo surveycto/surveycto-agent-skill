@@ -368,6 +368,18 @@ def test_cache_file_is_chmod_600() -> None:
         assert mode == 0o600, oct(mode)
 
 
+def test_glossary_is_word_bounded() -> None:
+    g = {"id": "ID", "case": "CASE", "drinking water": "DW"}
+    # whole-word matches replace; substrings inside larger words do not
+    assert T.apply_glossary("the id field", g) == "the ID field"
+    assert T.apply_glossary("a good idea", g) == "a good idea"          # not 'a good IDea'
+    assert T.apply_glossary("heavy caseload here", g) == "heavy caseload here"
+    assert T.apply_glossary("this case matters", g) == "this CASE matters"
+    assert T.apply_glossary("no drinking water today", g) == "no DW today"  # multi-word
+    # case-insensitive, and a replacement with regex-special chars stays literal
+    assert T.apply_glossary("ID and Id and id", {"id": "x$1\\1"}) == "x$1\\1 and x$1\\1 and x$1\\1"
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -198,7 +198,14 @@ def _load_glossary(glossary_path: str, target_language: str) -> dict:
 
 
 def apply_glossary(text: str, glossary: dict) -> str:
-    """Case-insensitive whole-phrase replacement, longest terms first."""
+    """Case-insensitive, whole-word replacement, longest terms first.
+
+    Matches are bounded by Unicode word characters, so a term never replaces a
+    substring inside a larger word (e.g. ``id`` will not touch ``idea`` or
+    ``paid``; ``case`` will not touch ``caseload``). Multi-word terms match as
+    written. Matching is whole-word, not morphological, so it does not handle
+    inflected forms; curate the glossary accordingly.
+    """
     if not glossary:
         return text
     result = text
@@ -206,19 +213,11 @@ def apply_glossary(text: str, glossary: dict) -> str:
         if not source:
             continue
         target = glossary[source]
-        idx = 0
-        lowered = result.lower()
-        needle = source.lower()
-        out = []
-        while True:
-            found = lowered.find(needle, idx)
-            if found == -1:
-                out.append(result[idx:])
-                break
-            out.append(result[idx:found])
-            out.append(target)
-            idx = found + len(needle)
-        result = "".join(out)
+        # (?<!\w)/(?!\w) keep the term from matching inside a larger word; \w is
+        # Unicode-aware for str patterns. The lambda avoids re.sub treating
+        # backslashes or group refs in the replacement text specially.
+        pattern = re.compile(r"(?<!\w)" + re.escape(source) + r"(?!\w)", re.IGNORECASE)
+        result = pattern.sub(lambda _m, t=target: t, result)
     return result
 
 

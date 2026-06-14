@@ -21,20 +21,22 @@ OpenAI authenticates with a **single API key string** that looks like
 
 You, the agent, must NEVER:
 
+- Ask the user to paste their API key into the chat, and never accept it there.
+  Chat text is persisted in history and cloud/admin logs, so a pasted key is
+  compromised from that moment and every other safeguard is moot. Use the file
+  handoff in "Coaching the user" instead.
 - Print, echo, repeat, or summarize the API key value, not in chat, not in a
   tool result, not in a code block, not in a commit, not in a log.
+- Read or `cat` the user's key file or `~/.surveycto-skill/openai-config.json`
+  into the conversation. Import the key file with the helper command (which never
+  prints it); do not open it yourself.
 - Write the key into any output file, the translated/transcribed CSV, a config
   you might display, or the conversation transcript.
-- Pass the key as a visible command-line argument that gets shown back to the
-  user (store it once, then reference it via the helper or the environment).
+- Pass the key as a visible command-line argument (e.g. `openai_auth.py set
+  sk-...`) in an environment whose commands are logged; prefer the file handoff.
 
-The user may give you the key in chat. When they do, record it once with the
-helper and then never reproduce it:
-
-```python
-import openai_auth
-openai_auth.save_api_key("<the key the user gave you>")  # stored chmod 600; never printed
-```
+If the user pastes the key into chat anyway, tell them it should be treated as
+exposed and rotated, and switch to the file handoff for the actual setup.
 
 At the start of any script that calls OpenAI, point the SDK at the key without
 revealing it:
@@ -85,19 +87,38 @@ transcription, so you only coach this once.
 > 2. Click "Create new secret key", give it a name like "surveycto", and create it.
 > 3. Copy the key now. OpenAI shows it only once. It looks like `sk-...`.
 
-### Step 3: Give the agent the key (or set it yourself)
+### Step 3: Hand the key over via a file (never via chat)
 
-Paste the key to the agent in chat and it will store it securely, or set it
-yourself in a terminal:
+Do not have the user paste the key into the chat, and do not tell them to
+`export OPENAI_API_KEY=...` in their own terminal. In hosted/sandboxed runtimes
+(e.g. Cowork) the skill runs in an isolated environment that cannot see the
+user's terminal, so a shell `export` or `openai_auth.py set` in their terminal
+never reaches it; and anything typed in chat is logged. Use a file the user edits
+in the working folder:
 
-```
-export OPENAI_API_KEY=sk-...        # for the current session, or
-python3 openai_auth.py set sk-...     # stores it (readable only by you)
-```
+1. Write the key file for them:
 
-The agent will store it with the helper and will never show it back to you. If
-you pasted the key into a chat, treat it as exposed there and rotate it later if
-that chat is shared or logged.
+   ```
+   python3 openai_auth.py template        # writes ./openai-key.txt with a placeholder
+   ```
+
+2. Tell the user, in chat:
+
+   > I created `openai-key.txt` in the working folder. Open it, replace the
+   > placeholder line with your OpenAI API key (`sk-...`), save, and tell me when
+   > it is ready. Do not paste the key into this chat.
+
+3. When they confirm, import it. This stores the key in the chmod-600 config and
+   deletes the file; it never prints the key:
+
+   ```
+   python3 openai_auth.py import-file openai-key.txt
+   ```
+
+Do not open, read, or `cat` `openai-key.txt` yourself; only run the import
+command. (Advanced/non-sandboxed users who already have the key in their
+environment can instead set `OPENAI_API_KEY`, which `configure_openai()` honors
+first.)
 
 ### Step 4: Install the client library
 
@@ -149,6 +170,9 @@ python3 usage_ledger.py reset    # clears the history
 ## Security checklist for generated scripts
 
 - [ ] Calls `openai_auth.configure_openai()`; never reads or prints the key value.
+- [ ] Onboards the key via the file handoff (`template` then `import-file`), never
+      via chat-paste or a terminal `export`; never opens/`cat`s the key file or
+      config (the skill `.gitignore` covers `openai-key.txt` and the config).
 - [ ] Never writes the key into output CSVs, logs, a committed config, or chat.
 - [ ] Treats any cache file (it contains source text or transcripts) as
       sensitive and keeps it out of version control (the skill `.gitignore`

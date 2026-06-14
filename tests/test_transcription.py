@@ -119,6 +119,26 @@ def test_confirm_gate() -> None:
         raise AssertionError("expected PermissionError without confirm")
 
 
+def test_unmeasurable_duration_fails_no_silent_zero_spend() -> None:
+    # if ffprobe can't read duration, a paid call must NOT happen and must NOT be
+    # booked as $0.00 (that silently under-reports spend)
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: None
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            c = FakeClient(lambda data: "SHOULD NOT BE CALLED")
+            s = X.transcribe_files([str(a)], str(out), confirm=True, client=c)
+            assert s["transcribed"] == 0 and s["failed"] == 1, s
+            assert c.transcriptions.calls == [], "made a paid call with unknown duration"
+            row = _read(out)[0]
+            assert row["status"].startswith("error") and "duration" in row["status"], row
+            assert s["total_spend_usd"] == 0.0, s  # nothing billed, nothing recorded
+    finally:
+        X._audio_duration_seconds = orig
+
+
 def test_failure_isolated_and_sanitized() -> None:
     orig = X._audio_duration_seconds
     X._audio_duration_seconds = lambda p: 10.0

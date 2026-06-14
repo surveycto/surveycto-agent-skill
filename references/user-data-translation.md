@@ -129,9 +129,10 @@ print(stats["output_path"], stats["cells_translated"], stats["cells_cached"])
 A glossary CSV (`source` + `target` or `target_<lang>` columns) enforces preferred
 renderings of recurring terms. It is applied **after** translation as a
 re-runnable overlay (the cache stores the raw translation, so changing the glossary
-does not force a re-translation). The match is a case-insensitive whole-phrase
-replacement, longest terms first; curate accordingly (it does not handle
-inflection).
+does not force a re-translation). The match is case-insensitive and whole-word
+(bounded by word characters, so `id` will not touch `idea` and `case` will not
+touch `caseload`), longest terms first; it is not morphological, so curate the
+glossary accordingly (it does not handle inflected forms).
 
 ```csv
 source,target_es,target_fr

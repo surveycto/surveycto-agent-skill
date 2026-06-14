@@ -32,6 +32,43 @@ def _fresh(tmp: Path) -> None:
     os.environ.pop("OPENAI_API_KEY", None)
 
 
+def test_key_file_handoff_imports_and_deletes() -> None:
+    import stat
+    with tempfile.TemporaryDirectory() as d:
+        _fresh(Path(d))
+        kf = Path(d) / "openai-key.txt"
+        auth.write_key_template(str(kf))
+        # template carries the placeholder and no real key
+        tmpl = kf.read_text()
+        assert "PASTE_YOUR_OPENAI_API_KEY_HERE" in tmpl and _FAKE not in tmpl
+        # importing while still a placeholder must refuse
+        try:
+            auth.import_key_file(str(kf))
+        except ValueError as exc:
+            assert "placeholder" in str(exc).lower() and "sk-" not in str(exc)
+        else:
+            raise AssertionError("expected refusal on un-edited placeholder")
+        # user edits the file, then import: stores masked, deletes file, never echoes
+        kf.write_text(f"# comment line\n{_FAKE}\n", encoding="utf-8")
+        masked = auth.import_key_file(str(kf))
+        assert _FAKE not in masked and "THISisAfake" not in masked
+        assert not kf.exists(), "key file should be deleted after import"
+        assert auth._resolve_api_key() == _FAKE          # stored and resolvable
+        mode = stat.S_IMODE(auth.CONFIG_PATH.stat().st_mode)
+        assert mode == 0o600, oct(mode)
+
+
+def test_save_tightens_preexisting_loose_permissions() -> None:
+    import stat
+    with tempfile.TemporaryDirectory() as d:
+        _fresh(Path(d))
+        auth.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        auth.CONFIG_PATH.write_text("{}", encoding="utf-8")
+        os.chmod(auth.CONFIG_PATH, 0o644)               # pre-existing world-readable
+        auth.save_api_key(_FAKE)
+        assert stat.S_IMODE(auth.CONFIG_PATH.stat().st_mode) == 0o600
+
+
 def test_save_then_resolve_via_config() -> None:
     with tempfile.TemporaryDirectory() as d:
         _fresh(Path(d))

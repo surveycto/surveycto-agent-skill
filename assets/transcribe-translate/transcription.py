@@ -415,7 +415,19 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                 if cached is not None:
                     row["transcript"] = cached
                     stats["cached"] += 1
+                    row["duration_seconds"] = _audio_duration_seconds(path)  # info only
                 else:
+                    # Require a measurable duration BEFORE the paid call so its cost
+                    # can be reported accurately. Otherwise a file with unreadable
+                    # duration (no ffprobe) would still be sent and then booked as
+                    # $0.00, silently under-reporting spend.
+                    dur = _audio_duration_seconds(path)
+                    if dur is None:
+                        raise TranscriptionError(
+                            "cannot measure this audio's duration (ffmpeg/ffprobe not "
+                            "found or unreadable file); it is required before a paid "
+                            "transcription so the cost can be reported. Install ffmpeg "
+                            "(it provides ffprobe) and retry.")
                     try:
                         text = _transcribe_one(path, spec, client)
                     except TranscriptionError:
@@ -427,17 +439,15 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                             f"transcription failed ({type(exc).__name__})"
                         ) from None
                     row["transcript"] = text
+                    row["duration_seconds"] = dur
                     stats["transcribed"] += 1
                     fresh = True
+                    billed_seconds += dur
                     if cache_conn is not None:
                         cache_conn.execute(
                             "INSERT OR REPLACE INTO transcripts VALUES (?,?,?)",
                             (key, backend, text))
                         cache_conn.commit()
-                dur = _audio_duration_seconds(path)
-                row["duration_seconds"] = dur
-                if fresh and dur:
-                    billed_seconds += dur
             except FileNotFoundError:
                 # never echo the path here; it is already in the `file` column
                 row["status"] = "error: audio file not found"

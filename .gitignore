@@ -22,6 +22,7 @@ __pycache__/
 # OpenAI credentials (the API key is secret; never commit)
 openai-config.json
 *.openai-key
+openai-key.txt
 
 # Translation / transcription caches (contain source text or transcripts)
 translation-cache.db
