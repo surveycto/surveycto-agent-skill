@@ -38,7 +38,8 @@ Translation uses an OpenAI chat model. The user can pick:
 - `cheap` -> `gpt-4.1-nano` (DEFAULT; lowest cost, strong multilingual quality)
 - `better` -> `gpt-4o-mini` (slightly higher cost; use for nuanced/high-stakes text)
 
-Pass `--model cheap|better` (or an explicit model id). Default to `cheap` and
+Pass `--model cheap|better` (other model ids are rejected unless their pricing is
+added, so the estimate stays accurate). Default to `cheap` and
 only suggest `better` if the user reports quality concerns on nuanced text.
 
 ## What the module gives you
@@ -110,9 +111,14 @@ PY=<the VENV_PYTHON path from setup_env.py>
     --target en --output responses_en.csv --cache translation-cache.db --confirm
 ```
 
-Equivalent inside a generated Python script (run under the same interpreter):
+Equivalent inside a generated Python script (run under the same interpreter). The
+helper modules live in the skill's `assets/transcribe-translate/` directory (whose
+name has a hyphen, so it is not importable as a package); add it to `sys.path`
+before importing:
 
 ```python
+import sys
+sys.path.insert(0, "assets/transcribe-translate")   # path to the skill's module dir
 import openai_auth, translation
 openai_auth.configure_openai()
 est = translation.estimate_cost("responses.csv", ["q_open","comments"], "en")

@@ -9,7 +9,8 @@ written to a file; the agent orchestrates and reports without ingesting the cell
 Model selection (the user picks; the cheapest is the default):
     "cheap"  -> gpt-4.1-nano  (DEFAULT)
     "better" -> gpt-4o-mini
-An explicit model id (e.g. "gpt-4o") is also accepted.
+The model id behind a menu name (gpt-4.1-nano / gpt-4o-mini) is also accepted;
+any other id is rejected, since the cost estimate needs a known rate.
 
 Design:
 * Cost gate: ``translate_csv`` refuses to run unless ``confirm=True``; call
@@ -88,12 +89,25 @@ class _LengthMismatch(RuntimeError):
 
 
 def resolve_model(model: str | None) -> dict:
-    """Resolve a menu name or explicit model id to a spec dict."""
+    """Resolve a menu name or supported model id to a spec dict.
+
+    Fails closed on unknown model ids: pricing drives the cost estimate, the
+    confirmation, and the spend ledger, so we never guess a rate. A menu name or a
+    model id that matches a known menu entry resolves to that entry's exact rates;
+    anything else raises with an actionable message.
+    """
     if not model:
         return dict(_MODELS[DEFAULT_MODEL])
     if model in _MODELS:
         return dict(_MODELS[model])
-    return {"id": model, "in_per_mtok": 0.15, "out_per_mtok": 0.60}
+    for spec in _MODELS.values():
+        if spec["id"] == model:
+            return dict(spec)
+    known = ", ".join(sorted({s["id"] for s in _MODELS.values()}))
+    raise ValueError(
+        f"Unknown translation model '{model}'. Use a menu name (cheap, better) or a "
+        f"supported model id ({known}). To use another model, add it with its "
+        "pricing to the model menu so the cost estimate stays accurate.")
 
 
 def _should_skip(value: str) -> bool:
@@ -407,6 +421,40 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
     cache_conn = _cache_connect(cache_path) if cache_path else None
     lang_key = source_language or "auto"
     stats = {"cells_translated": 0, "cells_cached": 0, "cells_skipped": 0, "chars_sent": 0}
+    tok_in_total = 0
+    tok_out_total = 0
+    have_usage = True
+    _spend_done = False
+
+    def _finalize_spend() -> None:
+        """Record spend for whatever was actually billed, exactly once. The user
+        is charged per successful batch, so this must run before re-raising a
+        mid-run failure too, not only on the happy path."""
+        nonlocal _spend_done
+        if _spend_done:
+            return
+        _spend_done = True
+        if stats["cells_translated"] > 0:
+            if have_usage and (tok_in_total or tok_out_total):
+                actual_usd = (tok_in_total / 1e6 * spec["in_per_mtok"]
+                              + tok_out_total / 1e6 * spec["out_per_mtok"])
+                units = f"{tok_in_total + tok_out_total:,} tokens"
+            else:
+                chars = stats["chars_sent"]
+                tok_in = chars / 4 + stats["cells_translated"] * 12
+                actual_usd = (tok_in / 1e6 * spec["in_per_mtok"]
+                              + chars / 4 / 1e6 * spec["out_per_mtok"])
+                units = f"~{chars:,} chars (estimated)"
+            spend = usage_ledger.record("translate", model_id, units, actual_usd)
+        else:
+            s = usage_ledger.summary()
+            spend = {"run_usd": 0.0, "run_usd_display": "$0.00",
+                     "total_usd": s["total_usd"], "total_usd_display": s["total_usd_display"]}
+        stats["actual_usd"] = spend["run_usd"]
+        stats["actual_usd_display"] = spend["run_usd_display"]
+        stats["total_spend_usd"] = spend["total_usd"]
+        stats["total_spend_usd_display"] = spend["total_usd_display"]
+
     try:
         to_translate: dict[str, list[tuple[int, str]]] = {}
         resolved: dict[tuple[int, str], str] = {}
@@ -436,9 +484,6 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
 
         client_obj = None
         pending = list(to_translate)
-        tok_in_total = 0
-        tok_out_total = 0
-        have_usage = True
         for start in range(0, len(pending), batch_size):
             chunk = pending[start:start + batch_size]
             if client_obj is None:
@@ -473,36 +518,17 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
                     oc = out_columns[col]
                     out_row[oc] = resolved.get((i, oc), "")
                 w.writerow(out_row)
+    except BaseException:
+        # a later batch (or the output write) failed after earlier paid batches
+        # already incurred OpenAI cost; record that real spend before propagating
+        _finalize_spend()
+        raise
     finally:
         if cache_conn is not None:
             cache_conn.close()
     stats["model"] = model_id
     stats["output_path"] = output_path
-
-    # actual spend: bill on real tokens when the responses reported usage,
-    # otherwise fall back to a character-based approximation of what was sent
-    # (uses the same per-token formula; the dollar figure is approximate)
-    if stats["cells_translated"] > 0:
-        if have_usage and (tok_in_total or tok_out_total):
-            actual_usd = (tok_in_total / 1e6 * spec["in_per_mtok"]
-                          + tok_out_total / 1e6 * spec["out_per_mtok"])
-            units = f"{tok_in_total + tok_out_total:,} tokens"
-        else:
-            chars = stats["chars_sent"]
-            tok_in = chars / 4 + stats["cells_translated"] * 12
-            actual_usd = (tok_in / 1e6 * spec["in_per_mtok"]
-                          + chars / 4 / 1e6 * spec["out_per_mtok"])
-            units = f"~{chars:,} chars (estimated)"
-        spend = usage_ledger.record("translate", model_id, units, actual_usd)
-    else:
-        spend = usage_ledger.summary()
-        spend = {"run_usd": 0.0, "run_usd_display": "$0.00",
-                 "total_usd": spend["total_usd"],
-                 "total_usd_display": spend["total_usd_display"]}
-    stats["actual_usd"] = spend["run_usd"]
-    stats["actual_usd_display"] = spend["run_usd_display"]
-    stats["total_spend_usd"] = spend["total_usd"]
-    stats["total_spend_usd_display"] = spend["total_usd_display"]
+    _finalize_spend()
     return stats
 
 
@@ -521,14 +547,14 @@ def _main(argv: list[str]) -> int:
     pe.add_argument("csv_path", help="path to the exported CSV")
     pe.add_argument("--columns", required=True, help="comma-separated column names to translate")
     pe.add_argument("--target", required=True, help="target language ISO code (en, es, fr, ...)")
-    pe.add_argument("--model", default=None, help="cheap (default, gpt-4.1-nano) | better | model id")
+    pe.add_argument("--model", default=None, help="cheap (default, gpt-4.1-nano) | better")
     pt = sub.add_parser("translate", help="translate the columns and write a new CSV")
     pt.add_argument("csv_path", help="path to the exported CSV")
     pt.add_argument("--columns", required=True, help="comma-separated column names to translate")
     pt.add_argument("--target", required=True, help="target language ISO code (en, es, fr, ...)")
     pt.add_argument("--source", default=None, help="source language ISO code; omit to auto-detect")
     pt.add_argument("--output", required=True, help="path for the result CSV (adds <col>_<target> columns)")
-    pt.add_argument("--model", default=None, help="cheap (default, gpt-4.1-nano) | better | model id")
+    pt.add_argument("--model", default=None, help="cheap (default, gpt-4.1-nano) | better")
     pt.add_argument("--glossary", default=None, help="optional CSV with source,target term overrides")
     pt.add_argument("--cache", default=None, help="optional SQLite cache path so re-runs are cheap")
     pt.add_argument("--confirm", action="store_true", help="required: confirms you accepted the cost/PII")

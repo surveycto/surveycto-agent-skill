@@ -11,7 +11,8 @@ Model selection (the user picks; the cheapest is the default):
     "fast"     -> gpt-4o-mini-transcribe   (DEFAULT; cheapest, ~$0.003/min)
     "accurate" -> gpt-4o-transcribe        (~$0.006/min)
     "whisper"  -> whisper-1                (~$0.006/min; no duration cap, only 25 MB)
-  An explicit model id (e.g. "gpt-4o-transcribe") is also accepted.
+  A model id behind a menu name is also accepted; any other id is rejected,
+  since the cost estimate needs a known per-minute rate.
 
 Long files are handled automatically: OpenAI limits a request to ~25 MB, and the
 gpt-4o-* models also cap audio by a token/context limit (~15 min of speech,
@@ -77,23 +78,26 @@ _AUDIO_EXTS = {".wav", ".flac", ".mp3", ".m4a", ".ogg", ".opus", ".webm", ".aac"
 
 
 def resolve_model(model: str | None) -> dict:
-    """Resolve a menu name or explicit model id to a spec dict.
+    """Resolve a menu name or supported model id to a spec dict.
 
-    :param model: One of the menu keys (``fast``/``accurate``/``whisper``), an
-        explicit OpenAI model id, or ``None`` for the default.
+    :param model: A menu key (``fast``/``accurate``/``whisper``), a model id that
+        matches a known menu entry, or ``None`` for the default. Fails closed on
+        any other id, since the cost estimate needs a known per-minute rate.
     :returns: Dict with ``id``, ``usd_per_min``, ``max_duration_sec``.
     """
     if not model:
         return dict(_MODELS[DEFAULT_MODEL])
     if model in _MODELS:
         return dict(_MODELS[model])
-    # explicit model id: assume the gpt-4o-* limits unless it is whisper
-    is_whisper = "whisper" in model
-    return {
-        "id": model,
-        "usd_per_min": 0.006,
-        "max_duration_sec": None if is_whisper else _GPT4O_MAX_DURATION_SEC,
-    }
+    for spec in _MODELS.values():
+        if spec["id"] == model:
+            return dict(spec)
+    # fail closed: pricing drives the estimate/confirmation/ledger, so never guess
+    known = ", ".join(sorted({s["id"] for s in _MODELS.values()}))
+    raise ValueError(
+        f"Unknown transcription model '{model}'. Use a menu name (fast, accurate, "
+        f"whisper) or a supported model id ({known}). To use another model, add it "
+        "with its per-minute rate and limit to the model menu.")
 
 
 _NO_EGRESS_MSG = (
@@ -375,9 +379,19 @@ def _cache_connect(cache_path: str) -> sqlite3.Connection:
         conn.execute("PRAGMA busy_timeout=30000")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS transcripts ("
-            "file_hash TEXT NOT NULL, backend TEXT NOT NULL, "
-            "transcript TEXT NOT NULL, PRIMARY KEY (file_hash, backend))"
+            "file_hash TEXT NOT NULL, backend TEXT NOT NULL, language TEXT NOT NULL, "
+            "transcript TEXT NOT NULL, PRIMARY KEY (file_hash, backend, language))"
         )
+        # migrate a pre-language cache: the language hint affects the transcript,
+        # so an old table (keyed only by file+backend) must not serve a row for a
+        # different language. The cache is disposable, so just rebuild it.
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(transcripts)")]
+        if "language" not in cols:
+            conn.execute("DROP TABLE transcripts")
+            conn.execute(
+                "CREATE TABLE transcripts ("
+                "file_hash TEXT NOT NULL, backend TEXT NOT NULL, language TEXT NOT NULL, "
+                "transcript TEXT NOT NULL, PRIMARY KEY (file_hash, backend, language))")
     except Exception:
         conn.close()
         raise
@@ -424,6 +438,7 @@ def transcribe_files(audio_paths: list[str], output_path: str,
         )
     spec = resolve_model(model)
     backend = spec["id"]
+    lang_key = language or "auto"  # cache key: the hint changes the transcript
     cache_conn = _cache_connect(cache_path) if cache_path else None
     stats = {"transcribed": 0, "cached": 0, "failed": 0}
     billed_seconds = 0.0  # audio actually sent to OpenAI this run
@@ -440,8 +455,9 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                 cached = None
                 if cache_conn is not None:
                     cur = cache_conn.execute(
-                        "SELECT transcript FROM transcripts WHERE file_hash=? AND backend=?",
-                        (key, backend))
+                        "SELECT transcript FROM transcripts WHERE file_hash=? AND "
+                        "backend=? AND language=?",
+                        (key, backend, lang_key))
                     hit = cur.fetchone()
                     if hit is not None:
                         cached = hit[0]
@@ -484,8 +500,8 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                     billed_seconds += submitted
                     if cache_conn is not None:
                         cache_conn.execute(
-                            "INSERT OR REPLACE INTO transcripts VALUES (?,?,?)",
-                            (key, backend, text))
+                            "INSERT OR REPLACE INTO transcripts VALUES (?,?,?,?)",
+                            (key, backend, lang_key, text))
                         cache_conn.commit()
             except FileNotFoundError:
                 # never echo the path here; it is already in the `file` column
@@ -547,12 +563,12 @@ def _main(argv: list[str]) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     pe = sub.add_parser("estimate", help="show duration, approx cost, and the PII warning")
     pe.add_argument("audio_paths", nargs="+", help="one or more audio file paths")
-    pe.add_argument("--model", default=None, help="fast (default) | accurate | whisper | model id")
+    pe.add_argument("--model", default=None, help="fast (default) | accurate | whisper")
     pt = sub.add_parser("transcribe", help="transcribe the audio and write a results CSV")
     pt.add_argument("audio_paths", nargs="+", help="one or more audio file paths")
     pt.add_argument("--output", required=True, help="path for the results CSV")
     pt.add_argument("--model", default=None,
-                    help="fast (default, gpt-4o-mini-transcribe) | accurate | whisper | model id")
+                    help="fast (default, gpt-4o-mini-transcribe) | accurate | whisper")
     pt.add_argument("--cache", default=None, help="optional SQLite cache path so re-runs are free")
     pt.add_argument("--language", default=None,
                     help="optional ISO-639-1 hint (e.g. en) to improve accuracy; omit to auto-detect")

@@ -34,7 +34,7 @@ Claude Cowork has a UI for both pieces.
 3. Click into **Connectors** and then **Add custom connector**.
 4. Enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
 5. Once the connector is added, click **Always allow** for each of the SurveyCTO tools.
-6. **Configure network egress before your first chat.** Cowork sandboxes skill execution and blocks outbound network access by default; the SurveyCTO MCP server needs egress to `*.surveycto.net` for XLSForm upload and download. In Cowork's **Settings → Capabilities**, turn on **Allow network egress** and add `*.surveycto.net` to the additional allowed domains (or set the domain allowlist to **All domains**):
+6. **Configure network egress before your first chat.** Cowork sandboxes skill execution and blocks outbound network access by default; the SurveyCTO MCP server needs egress to `*.surveycto.net` for XLSForm upload and download. In Cowork's **Settings → Capabilities**, turn on **Allow network egress** and add `*.surveycto.net` to the additional allowed domains (or set the domain allowlist to **All domains**). If you will use the **translate / transcribe exported data** workflows, also add `api.openai.com` (they call OpenAI; without it those workflows fail at the API call). On Team/Enterprise this allowlist is admin-controlled. See [`references/install.md`](references/install.md) for details.
 
    ![Cowork Settings → Capabilities, showing Allow network egress enabled and *.surveycto.net in the additional allowed domains list (as of 2026-05-14)](.github/images/cowork-egress-settings.png)
 

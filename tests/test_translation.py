@@ -443,6 +443,57 @@ def test_glossary_is_word_bounded() -> None:
     assert T.apply_glossary("ID and Id and id", {"id": "x$1\\1"}) == "x$1\\1 and x$1\\1 and x$1\\1"
 
 
+def test_resolve_model_fails_closed_and_prices_known_ids() -> None:
+    assert T.resolve_model("better")["in_per_mtok"] == 0.15
+    # a model id behind a menu name resolves to that entry's exact rate
+    assert T.resolve_model("gpt-4.1-nano")["in_per_mtok"] == 0.10
+    assert T.resolve_model("gpt-4o-mini")["in_per_mtok"] == 0.15
+    # an unsupported id (e.g. the pricier gpt-4o) fails closed rather than being
+    # priced at the cheaper menu rate
+    try:
+        T.resolve_model("gpt-4o")
+    except ValueError as exc:
+        assert "Unknown translation model" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for an unsupported model id")
+
+
+def test_spend_recorded_when_a_later_batch_fails() -> None:
+    # batch 1 succeeds (incurs OpenAI cost), batch 2 fails -> the ledger must still
+    # record batch 1's real spend, not stay silent
+    real_sleep = T.time.sleep; T.time.sleep = lambda s: None
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    try:
+        class _Usage:
+            prompt_tokens = 2_000_000; completion_tokens = 1_000_000
+        class _RespU(_Resp):
+            def __init__(self, content): super().__init__(content); self.usage = _Usage()
+        class _C:
+            def __init__(self): self.n = 0
+            def create(self, model, temperature, response_format, messages):
+                self.n += 1
+                inputs = json.loads(messages[1]["content"])["inputs"]
+                if self.n >= 2:
+                    raise ValueError("simulated non-retryable API failure")
+                return _RespU(json.dumps({"translations": [f"EN[{x}]" for x in inputs]}))
+        class Client(FakeClient):
+            def __init__(self): super().__init__(); self.chat = _Chat(_C())
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+            _write(p, ["note"], [{"note": "hola"}, {"note": "adios"}])  # 2 cells
+            raised = False
+            try:
+                T.translate_csv(str(p), ["note"], "en", "es", str(out), client=Client(),
+                                confirm=True, batch_size=1)  # force two batches
+            except RuntimeError:
+                raised = True
+            assert raised, "expected the second batch to fail"
+            # batch 1 billed 3M tokens at gpt-4.1-nano (0.10/0.40) = $0.60, recorded
+            assert abs(_UL.summary()["total_usd"] - 0.60) < 1e-6, _UL.summary()
+    finally:
+        T.time.sleep = real_sleep
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

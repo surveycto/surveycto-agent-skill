@@ -29,7 +29,8 @@ Transcription model menu:
 - `accurate` -> `gpt-4o-transcribe` (~$0.006/audio-min)
 - `whisper` -> `whisper-1` (~$0.006/audio-min)
 
-Pass `--model fast|accurate|whisper` (or an explicit model id).
+Pass `--model fast|accurate|whisper` (other model ids are rejected unless their
+per-minute rate is added, so the estimate stays accurate).
 
 ### Long audio: which model, and automatic chunking
 
@@ -116,9 +117,14 @@ PY=<the VENV_PYTHON path from setup_env.py>
     --output transcripts.csv --cache transcription-cache.db --confirm
 ```
 
-Equivalent inside a generated Python script (run under the same interpreter):
+Equivalent inside a generated Python script (run under the same interpreter). The
+helper modules live in the skill's `assets/transcribe-translate/` directory (whose
+name has a hyphen, so it is not importable as a package); add it to `sys.path`
+before importing:
 
 ```python
+import sys
+sys.path.insert(0, "assets/transcribe-translate")   # path to the skill's module dir
 import openai_auth, transcription
 openai_auth.configure_openai()
 est = transcription.estimate_cost(["audio/r1.mp3","audio/r2.mp3"])

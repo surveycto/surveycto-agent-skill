@@ -73,8 +73,10 @@ PY=<the VENV_PYTHON path from setup_env.py>
 ```
 
 Run `"$PY" assets/transcribe-translate/translation.py --help` or `"$PY" assets/transcribe-translate/transcription.py --help` for all flags
-and examples. The same functions are importable (`import translation` /
-`transcription`, after `openai_auth.configure_openai()`) if you prefer a script.
+and examples. The same functions are importable if you prefer a script, but this
+directory's name has a hyphen so it is not a package — add it to `sys.path` first:
+`import sys; sys.path.insert(0, "assets/transcribe-translate"); import translation`
+(then `openai_auth.configure_openai()`).
 
 ## The key rule, in code
 

@@ -68,9 +68,17 @@ def test_resolve_model() -> None:
     assert X.resolve_model("whisper")["id"] == "whisper-1"
     assert X.resolve_model("whisper")["max_duration_sec"] is None
     assert X.resolve_model("accurate")["max_duration_sec"] == X._GPT4O_MAX_DURATION_SEC
+    # a model id behind a menu name resolves to that entry's exact rate
     explicit = X.resolve_model("gpt-4o-transcribe")
-    assert explicit["id"] == "gpt-4o-transcribe" and explicit["max_duration_sec"] is not None
-    assert X.resolve_model("whisper-large-v3")["max_duration_sec"] is None
+    assert explicit["id"] == "gpt-4o-transcribe" and explicit["usd_per_min"] == 0.006
+    assert X.resolve_model("gpt-4o-mini-transcribe")["usd_per_min"] == 0.003  # not the 0.006 default
+    # an unknown id fails closed (pricing would be a guess)
+    try:
+        X.resolve_model("whisper-large-v3")
+    except ValueError as exc:
+        assert "Unknown transcription model" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for an unknown model id")
 
 
 def test_estimate_cost() -> None:
@@ -417,6 +425,30 @@ def test_language_hint_forwarded_to_api() -> None:
             c2 = FakeClient()
             X.transcribe_files([str(a)], str(Path(d) / "o2.csv"), confirm=True, client=c2)
             assert c2.transcriptions.languages == [None], c2.transcriptions.languages  # auto-detect
+    finally:
+        X._audio_duration_seconds = orig
+
+
+def test_cache_keyed_by_language() -> None:
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 30.0
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); cache = Path(d) / "c.db"
+            # auto-detect run populates the cache under language='auto'
+            X.transcribe_files([str(a)], str(Path(d) / "o1.csv"), cache_path=str(cache),
+                               confirm=True, client=FakeClient(lambda data: "auto transcript"))
+            # a run with --language es must NOT reuse the auto transcript
+            s2 = X.transcribe_files([str(a)], str(Path(d) / "o2.csv"), cache_path=str(cache),
+                                    confirm=True, language="es",
+                                    client=FakeClient(lambda data: "es transcript"))
+            assert s2["transcribed"] == 1 and s2["cached"] == 0, s2  # cache miss
+            assert _read(Path(d) / "o2.csv")[0]["transcript"] == "es transcript"
+            # re-running es now hits the cache (no client call)
+            c3 = FakeClient(lambda data: "SHOULD NOT BE USED")
+            s3 = X.transcribe_files([str(a)], str(Path(d) / "o3.csv"), cache_path=str(cache),
+                                    confirm=True, language="es", client=c3)
+            assert s3["cached"] == 1 and c3.transcriptions.calls == [], s3
     finally:
         X._audio_duration_seconds = orig
 
