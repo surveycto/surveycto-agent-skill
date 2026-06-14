@@ -392,27 +392,62 @@ def test_windowed_multipart_path_stitches() -> None:
         X._audio_duration_seconds = orig_d; X.os.path.getsize = orig_g; X._extract_chunk = orig_ex
 
 
-def test_actual_spend_billed_on_audio_minutes() -> None:
+def test_whisper_billed_on_submitted_seconds_without_usage() -> None:
+    # whisper-1 is duration-billed; when a response carries no usage.seconds, bill
+    # on the locally-measured submitted duration (never silently $0)
     orig = X._audio_duration_seconds
     X._audio_duration_seconds = lambda p: 120.0  # 2 min
     _UL.LEDGER_PATH.unlink(missing_ok=True)
     try:
         with tempfile.TemporaryDirectory() as d:
             a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
-            # fast model: $0.003/audio-min * 2 min = $0.006 -> sub-cent display
-            s = X.transcribe_files([str(a)], str(out), confirm=True, client=FakeClient())
-            assert abs(s["actual_usd"] - 0.006) < 1e-6, s
-            assert s["actual_usd_display"] == "< $0.01"
-            assert abs(s["total_spend_usd"] - 0.006) < 1e-6, s
+            # whisper: $0.006/audio-min * 2 min = $0.012
+            s = X.transcribe_files([str(a)], str(out), model="whisper", confirm=True,
+                                   client=FakeClient())  # no usage_handler
+            assert abs(s["actual_usd"] - 0.012) < 1e-6, s
+            assert s["actual_usd_display"] == "$0.01"
+            assert abs(s["total_spend_usd"] - 0.012) < 1e-6, s
             # a fully-cached re-run records nothing (no API call) but reports the total
             cache = Path(d) / "c.db"
-            X.transcribe_files([str(a)], str(out), cache_path=str(cache), confirm=True, client=FakeClient())
+            X.transcribe_files([str(a)], str(out), model="whisper", cache_path=str(cache),
+                               confirm=True, client=FakeClient())
             before = X.usage_ledger.summary()["total_usd"]
-            s2 = X.transcribe_files([str(a)], str(out), cache_path=str(cache), confirm=True, client=FakeClient())
+            s2 = X.transcribe_files([str(a)], str(out), model="whisper", cache_path=str(cache),
+                                    confirm=True, client=FakeClient())
             assert s2["cached"] == 1 and s2["actual_usd"] == 0.0, s2
             assert abs(s2["total_spend_usd"] - before) < 1e-6, s2  # unchanged by a cached run
     finally:
         X._audio_duration_seconds = orig
+
+
+def test_partial_chunk_spend_recorded_when_later_chunk_fails() -> None:
+    # a multi-chunk file whose first chunk succeeds (billed) then a later chunk
+    # fails: the successful chunk's spend must still be recorded, not lost
+    orig_d = X._audio_duration_seconds; orig_g = X.os.path.getsize; orig_ex = X._extract_chunk
+    X._audio_duration_seconds = lambda p: 1800.0          # 30 min -> several chunks
+    X.os.path.getsize = lambda p: 5_000_000
+    X._extract_chunk = lambda src, start, length, dst: open(dst, "wb").write(b"x" * 100)
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            state = {"n": 0}
+            def handler(data):
+                state["n"] += 1
+                if state["n"] >= 2:
+                    raise RuntimeError("later chunk boom")  # non-too-large failure
+                return "first chunk text"
+            def uh(data):
+                return _Usage(input_tokens=100_000, output_tokens=20_000)
+            s = X.transcribe_files([str(a)], str(out), model="accurate", confirm=True,
+                                   client=FakeClient(handler, usage_handler=uh))
+            assert s["failed"] == 1 and s["transcribed"] == 0, s  # the file errored
+            # but the first chunk's tokens (100k in @ $2.50, 20k out @ $10.00) were billed
+            expected = 100_000 / 1e6 * 2.50 + 20_000 / 1e6 * 10.00  # = $0.45
+            assert abs(s["total_spend_usd"] - expected) < 1e-6, s
+            assert _UL.summary()["total_usd"] > 0.0, _UL.summary()
+    finally:
+        X._audio_duration_seconds = orig_d; X.os.path.getsize = orig_g; X._extract_chunk = orig_ex
 
 
 def test_cache_file_is_chmod_600() -> None:
@@ -622,6 +657,21 @@ def test_media_env_strips_openai_key() -> None:
             os.environ.pop("OPENAI_API_KEY", None)
         else:
             os.environ["OPENAI_API_KEY"] = orig
+
+
+def test_nested_cache_path_is_created() -> None:
+    # a --cache path in a not-yet-existing subdirectory must be created, not error
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 30.0
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.csv"
+            cache = Path(d) / "new" / "dir" / "c.db"
+            s = X.transcribe_files([str(a)], str(out), cache_path=str(cache),
+                                   confirm=True, client=FakeClient())
+            assert s["transcribed"] == 1 and cache.is_file(), s
+    finally:
+        X._audio_duration_seconds = orig
 
 
 def main() -> int:

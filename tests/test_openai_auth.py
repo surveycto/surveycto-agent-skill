@@ -172,6 +172,64 @@ def test_corrupt_config_is_handled_gracefully() -> None:
         raise AssertionError("expected RuntimeError on corrupt config with no env key")
 
 
+def test_template_refuses_symlink_target() -> None:
+    # writing the template through a symlink could redirect the write onto another
+    # file (e.g. the config); refuse rather than follow it
+    with tempfile.TemporaryDirectory() as d:
+        _fresh(Path(d))
+        real = Path(d) / "secret-config.json"
+        real.write_text('{"keep":"me"}\n', encoding="utf-8")
+        link = Path(d) / "openai-key.txt"
+        link.symlink_to(real)
+        try:
+            auth.write_key_template(str(link))
+        except ValueError as exc:
+            assert "symlink" in str(exc).lower()
+        else:
+            raise AssertionError("expected refusal to write through a symlink")
+        assert real.read_text(encoding="utf-8") == '{"keep":"me"}\n'  # target untouched
+
+
+def test_import_refuses_symlink_target() -> None:
+    # importing through a symlink would let the overwrite/delete hit another file
+    with tempfile.TemporaryDirectory() as d:
+        _fresh(Path(d))
+        real = Path(d) / "secret-config.json"
+        real.write_text('{"keep":"me"}\n', encoding="utf-8")
+        link = Path(d) / "openai-key.txt"
+        link.symlink_to(real)
+        try:
+            auth.import_key_file(str(link))
+        except ValueError as exc:
+            assert "symlink" in str(exc).lower() and "sk-" not in str(exc)
+        else:
+            raise AssertionError("expected refusal to import through a symlink")
+        assert real.read_text(encoding="utf-8") == '{"keep":"me"}\n'  # target untouched
+
+
+def test_import_reports_when_plaintext_cannot_be_removed() -> None:
+    # if the plaintext key file survives deletion, import must NOT report a clean
+    # success; it raises so the lingering key is surfaced
+    import stat as _stat
+    with tempfile.TemporaryDirectory() as d:
+        _fresh(Path(d))
+        sub = Path(d) / "ro"
+        sub.mkdir()
+        kf = sub / "openai-key.txt"
+        kf.write_text(_FAKE + "\n", encoding="utf-8")
+        os.chmod(sub, 0o500)  # read+exec only: file inside cannot be unlinked
+        try:
+            auth.import_key_file(str(kf))
+        except RuntimeError as exc:
+            assert "could not delete" in str(exc).lower()
+            assert _FAKE not in str(exc) and "sk-" not in str(exc)
+            assert auth._resolve_api_key() == _FAKE  # the key was still stored
+        else:
+            raise AssertionError("expected a cleanup error when the file cannot be removed")
+        finally:
+            os.chmod(sub, 0o700)  # restore so the temp dir can be cleaned up
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

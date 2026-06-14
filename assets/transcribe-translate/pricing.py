@@ -30,6 +30,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 # Fail-safe copy of the shipped rates, kept byte-for-byte in sync with
@@ -155,8 +156,15 @@ def _set_rate(kind: str, model_id: str, fields: dict, as_of: str) -> dict:
     Refuses an unknown model id (refresh updates known models, never invents one).
     Validates the supplied fields against the model's billing mode and requires at
     least one applicable field, so ``last_verified`` is never restamped without a
-    rate that actually applies. Returns the provenance dict.
+    rate that actually applies. ``as_of`` must be a real ``YYYY-MM-DD`` date so the
+    stamped provenance stays trustworthy. Returns the provenance dict.
     """
+    try:
+        datetime.strptime(as_of, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        raise ValueError(
+            f"--as-of must be a calendar date in YYYY-MM-DD form (got '{as_of}'). "
+            "Use the date you verified the rate.") from None
     data, _ = load()
     table = data.setdefault(kind, {})
     if model_id not in table:

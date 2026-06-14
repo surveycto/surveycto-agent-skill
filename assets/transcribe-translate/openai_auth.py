@@ -105,8 +105,16 @@ def write_key_template(path: str) -> str:
     user's terminal env, and chat text is logged): the agent writes this file, the
     user edits and saves it in the working folder, then the agent calls
     ``import_key_file`` to load it. This function never handles a real key.
+
+    :raises ValueError: If ``path`` is a symlink. Writing through a symlink would
+        let a planted link redirect this write onto another file (e.g. the config),
+        so a symlinked target is refused rather than followed.
     """
     p = Path(path)
+    if p.is_symlink():
+        raise ValueError(
+            f"Refusing to write the key file through a symlink ('{path}'). Remove "
+            "it and use a regular file path.")
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(_KEY_FILE_TEMPLATE, encoding="utf-8")
     try:
@@ -114,6 +122,35 @@ def write_key_template(path: str) -> str:
     except OSError:
         pass
     return str(p)
+
+
+def _remove_key_file(p: Path) -> None:
+    """Delete the plaintext key handoff file, verifying it is gone.
+
+    Operates only on a verified regular file (never follows a symlink that could
+    redirect the operation onto another target). Best-effort overwrites the
+    contents first, but unlinks even if that overwrite fails (a read-only file
+    still has to go), then confirms removal. Raises if the plaintext could not be
+    deleted, so the caller never reports a clean import while the raw key lingers.
+    """
+    if p.is_symlink() or not p.is_file():
+        raise ValueError(
+            "Refusing to delete the key file through a symlink or non-regular file.")
+    try:
+        # overwrite before unlink so the plaintext does not linger on disk
+        with open(p, "w", encoding="utf-8") as f:
+            f.write("# imported and removed\n")
+    except OSError:
+        pass  # a read-only file cannot be overwritten; still attempt the unlink
+    try:
+        p.unlink()
+    except OSError:
+        pass
+    if p.exists():
+        raise RuntimeError(
+            "Imported and stored the key, but could not delete the plaintext key "
+            "file. Delete it manually so the raw key does not linger. (The key was "
+            "not shown.)")
 
 
 def import_key_file(path: str, delete_after: bool = True) -> str:
@@ -124,11 +161,17 @@ def import_key_file(path: str, delete_after: bool = True) -> str:
     plaintext key does not linger in the working folder. Never prints the key.
 
     :returns: A masked form of the imported key (safe to show).
-    :raises ValueError: If the file is missing, still holds the placeholder, or
-        does not contain something that looks like an API key. Errors never
-        include the key.
+    :raises ValueError: If the file is missing, is a symlink, still holds the
+        placeholder, or does not contain something that looks like an API key.
+        Errors never include the key.
+    :raises RuntimeError: If the key was stored but the plaintext file could not be
+        deleted afterward (so the caller never reports a clean import).
     """
     p = Path(path)
+    if p.is_symlink():
+        raise ValueError(
+            f"Refusing to read the key file through a symlink ('{path}'). Remove it "
+            "and use a regular file.")
     if not p.is_file():
         raise ValueError(f"No key file at '{path}'. Create it with the template first.")
     candidate = ""
@@ -144,13 +187,7 @@ def import_key_file(path: str, delete_after: bool = True) -> str:
             "(The key is not shown here.)")
     save_api_key(candidate)  # validates the sk- shape and stores chmod 600
     if delete_after:
-        try:
-            # overwrite before unlink so the plaintext does not linger
-            with open(p, "w", encoding="utf-8") as f:
-                f.write("# imported and removed\n")
-            p.unlink()
-        except OSError:
-            pass
+        _remove_key_file(p)  # raises if the plaintext could not be removed
     return _mask(candidate)
 
 
@@ -244,6 +281,11 @@ def _main(argv: list[str]) -> int:
         try:
             masked = import_key_file(argv[1])
         except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        except RuntimeError as exc:
+            # the key was stored, but the plaintext file could not be deleted;
+            # surface the sanitized warning instead of reporting a clean import
             print(str(exc), file=sys.stderr)
             return 1
         print(f"Imported and stored the key (masked: {masked}). The key file was "

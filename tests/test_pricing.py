@@ -157,6 +157,30 @@ def test_set_rate_validates_fields_by_billing_mode() -> None:
             P._pricing_path = orig
 
 
+def test_set_rate_rejects_non_iso_as_of() -> None:
+    # last_verified provenance is only trustworthy if as-of is a real date; a free
+    # word like "yesterday" must be refused and must not restamp the file
+    orig = P._pricing_path
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d) / "pricing.json"
+        tmp.write_text(json.dumps(P._BUILTIN), encoding="utf-8")
+        P._pricing_path = lambda: tmp
+        try:
+            for bad in ("yesterday", "2027/01/02", "01-02-2027", "2027-13-40", ""):
+                try:
+                    P._set_rate("translation", "gpt-4.1-nano", {"in_per_mtok": 0.2}, bad)
+                except ValueError as exc:
+                    assert "YYYY-MM-DD" in str(exc), (bad, str(exc))
+                else:
+                    raise AssertionError(f"expected ValueError for as-of {bad!r}")
+            # none of the rejected calls restamped or changed the stored rate
+            data, _ = P.load()
+            assert data["last_verified"] == P._BUILTIN["last_verified"], data["last_verified"]
+            assert P.rate_for(data, "translation", "gpt-4.1-nano")["in_per_mtok"] == 0.1
+        finally:
+            P._pricing_path = orig
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

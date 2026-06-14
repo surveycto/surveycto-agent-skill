@@ -578,25 +578,67 @@ def test_parse_columns_strips_and_rejects_empty() -> None:
 
 
 def test_output_csv_write_is_atomic_on_failure() -> None:
-    # if the write fails, a pre-existing output must not be left truncated
+    # exercise _write_csv_atomic itself: if the final os.replace fails, a
+    # pre-existing output must be left untouched and no .tmp file may linger
+    import os as _os
     with tempfile.TemporaryDirectory() as d:
-        src = Path(d) / "in.csv"
-        _write(src, ["note"], [{"note": "hola"}])
         out = Path(d) / "out.csv"
         out.write_text("PREEXISTING CONTENT\n", encoding="utf-8")
-        # make the write fail by pointing the helper at an unwritable temp dir:
-        # easiest deterministic failure is a transform that raises mid-run
-        def boom(xs):
-            raise RuntimeError("boom")
+        real_replace = T.os.replace
+        def boom_replace(*a, **k):
+            raise OSError("simulated replace failure")
+        T.os.replace = boom_replace
         raised = False
         try:
-            T.translate_csv(str(src), ["note"], target_language="en",
-                            source_language=None, output_path=str(out),
-                            confirm=True, client=FakeClient(boom), max_retries=0)
-        except Exception:
+            T._write_csv_atomic(str(out), ["note"], [{"note": "hola"}])
+        except OSError:
             raised = True
-        assert raised
+        finally:
+            T.os.replace = real_replace
+        assert raised, "expected the atomic write to surface the replace failure"
         assert out.read_text(encoding="utf-8") == "PREEXISTING CONTENT\n"  # untouched
+        leftovers = [p.name for p in Path(d).iterdir() if p.suffix == ".tmp"]
+        assert leftovers == [], leftovers  # the temp file was cleaned up on failure
+
+
+def test_spend_recorded_for_billed_but_malformed_response() -> None:
+    # a response that carries usage (it was billed) but whose payload is the wrong
+    # length must still have its usage recorded, even when the batch ultimately
+    # fails with no cell translated
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    class _Usage:
+        prompt_tokens = 2_000_000; completion_tokens = 1_000_000
+    class _RespU(_Resp):
+        def __init__(self, content): super().__init__(content); self.usage = _Usage()
+    class _C:
+        def create(self, model, temperature, response_format, messages):
+            return _RespU(json.dumps({"translations": ["only one"]}))  # wrong length
+    class Client(FakeClient):
+        def __init__(self): super().__init__(); self.chat = _Chat(_C())
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        _write(p, ["note"], [{"note": "hola"}, {"note": "adios"}])
+        raised = False
+        try:
+            T.translate_csv(str(p), ["note"], "en", "es", str(out), client=Client(),
+                            confirm=True, max_retries=0)
+        except RuntimeError:
+            raised = True
+        assert raised, "expected a length-mismatch failure"
+        # 3M tokens at gpt-4.1-nano (0.10 in / 0.40 out) = $0.60, billed despite the
+        # malformed payload and the absent output
+        assert abs(_UL.summary()["total_usd"] - 0.60) < 1e-6, _UL.summary()
+
+
+def test_nested_cache_path_is_created() -> None:
+    # a --cache path in a not-yet-existing subdirectory must be created, not error
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        cache = Path(d) / "new" / "dir" / "c.db"
+        _write(p, ["note"], [{"note": "hola"}])
+        s = T.translate_csv(str(p), ["note"], "en", "es", str(out), client=FakeClient(),
+                            cache_path=str(cache), confirm=True)
+        assert s["cells_translated"] == 1 and cache.is_file(), s
 
 
 def main() -> int:

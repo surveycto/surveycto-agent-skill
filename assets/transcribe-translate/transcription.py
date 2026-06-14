@@ -363,7 +363,8 @@ def _fits_whole(path: str, spec: dict) -> bool:
 
 def _transcribe_segment(src: str, start: float, length: float, model_id: str,
                         client, depth: int = 0,
-                        language: str | None = None) -> tuple[str, float, dict]:
+                        language: str | None = None,
+                        acc: dict | None = None) -> tuple[str, float, dict]:
     """Transcribe a [start, start+length] segment, splitting recursively if the
     model rejects it as too large (adapts to dense audio / token limits).
 
@@ -371,6 +372,13 @@ def _transcribe_segment(src: str, start: float, length: float, model_id: str,
     audio actually sent to OpenAI summed across recursive splits, so it includes
     the ~1s overlap re-sent at each seam (the duration-billing basis). ``usage`` is
     the summed billing usage across the splits (token-billing basis for gpt-4o-*).
+
+    ``acc`` is an optional shared accumulator (``{"usage": <usage dict>, "seconds":
+    float}``). When supplied, each leaf folds its own billing into it the instant the
+    API call succeeds, so spend from completed chunks survives a later sibling
+    chunk's failure (the caller re-raises but still bills what was sent). Only leaves
+    fold, so a chunk is never double-counted; the returned values are independent of
+    ``acc`` and remain correct for direct callers that pass none.
     """
     with tempfile.TemporaryDirectory() as d:
         seg = os.path.join(d, "seg.mp3")
@@ -378,6 +386,9 @@ def _transcribe_segment(src: str, start: float, length: float, model_id: str,
         if os.path.getsize(seg) <= _MAX_BYTES:
             try:
                 text, usage = _transcribe_openai_file(seg, model_id, client, language)
+                if acc is not None:
+                    _add_usage(acc["usage"], usage)
+                    acc["seconds"] += length
                 return text, length, usage
             except Exception as exc:
                 if not _is_too_large_error(exc):
@@ -388,25 +399,33 @@ def _transcribe_segment(src: str, start: float, length: float, model_id: str,
                 "audio segment is too large to transcribe even after splitting")
     half = length / 2
     overlap = 1.0
-    lt, ls, lu = _transcribe_segment(src, start, half, model_id, client, depth + 1, language)
+    lt, ls, lu = _transcribe_segment(src, start, half, model_id, client, depth + 1, language, acc)
     rt, rs, ru = _transcribe_segment(src, max(0.0, start + half - overlap),
-                                     length - half + overlap, model_id, client, depth + 1, language)
+                                     length - half + overlap, model_id, client, depth + 1, language, acc)
     usage = _add_usage(_add_usage(_blank_usage(), lu), ru)
     return _stitch(lt, rt), ls + rs, usage
 
 
 def _transcribe_one(path: str, spec: dict, client, dur: float,
-                    language: str | None = None) -> tuple[str, float, dict]:
+                    language: str | None = None,
+                    acc: dict | None = None) -> tuple[str, float, dict]:
     """Transcribe one file: single-request, or windowed + adaptive chunks.
 
     ``dur`` is the file's measured duration (caller-required). Returns
     ``(text, submitted_seconds, usage)``: ``submitted_seconds`` is the total audio
     sent to OpenAI (for a chunked file it exceeds ``dur`` by the per-seam overlap),
     and ``usage`` is the summed billing usage across all requests.
+
+    ``acc`` is the optional shared billing accumulator (see :func:`_transcribe_segment`).
+    When supplied, each successful request folds its billing into it immediately, so
+    a multi-chunk file that fails partway still bills the chunks that did complete.
     """
     if _fits_whole(path, spec):
         try:
             text, usage = _transcribe_openai_file(path, spec["id"], client, language)
+            if acc is not None:
+                _add_usage(acc["usage"], usage)
+                acc["seconds"] += dur
             return text, dur, usage
         except Exception as exc:
             if not _is_too_large_error(exc):
@@ -427,7 +446,8 @@ def _transcribe_one(path: str, spec: dict, client, dur: float,
     while start < dur:
         s = start if not parts else max(0.0, start - overlap)
         length = min(window, dur - s)
-        ptext, psub, pusage = _transcribe_segment(path, s, length, spec["id"], client, language=language)
+        ptext, psub, pusage = _transcribe_segment(path, s, length, spec["id"], client,
+                                                  language=language, acc=acc)
         parts.append(ptext)
         submitted += psub
         _add_usage(usage, pusage)
@@ -476,6 +496,9 @@ def _write_csv_atomic(output_path: str, fieldnames: list[str], rows: list[dict])
 
 
 def _cache_connect(cache_path: str) -> sqlite3.Connection:
+    # create parent dirs like the output path does, so a nested --cache path
+    # (e.g. runs/cache.db) does not fail with "unable to open database file"
+    Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(cache_path, timeout=30)
     _restrict_cache_permissions(cache_path)
     try:
@@ -550,8 +573,12 @@ def transcribe_files(audio_paths: list[str], output_path: str,
     stats = {"transcribed": 0, "cached": 0, "failed": 0,
              "backend": backend, "output_path": output_path,
              "rates_as_of": prov["last_verified"], "rates_source": prov["source"]}
-    billed_seconds = 0.0  # audio sent to OpenAI this run (duration basis)
     run_usage = _blank_usage()  # summed token/duration usage from responses
+    # shared billing accumulator: chunk/file helpers fold each completed request's
+    # usage and submitted seconds into it the instant the call returns, so spend
+    # from successful chunks is recorded even if a later chunk in the same file
+    # fails. ``seconds`` is the audio sent to OpenAI this run (duration basis).
+    bill = {"usage": run_usage, "seconds": 0.0}
     _spend_done = False
 
     def _finalize_spend() -> None:
@@ -568,6 +595,7 @@ def transcribe_files(audio_paths: list[str], output_path: str,
         if _spend_done:
             return
         _spend_done = True
+        billed_seconds = bill["seconds"]
         if billed_seconds > 0:
             calls = run_usage["calls"]
             if billing == "token":
@@ -605,7 +633,6 @@ def transcribe_files(audio_paths: list[str], output_path: str,
         for path in audio_paths:
             row = {"file": path, "transcript": "", "backend": backend,
                    "duration_seconds": "", "status": "ok"}
-            fresh = False
             try:
                 if not os.path.isfile(path):
                     raise FileNotFoundError(f"No audio file at '{path}'.")
@@ -636,7 +663,10 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                             "transcription so the cost can be reported. Install ffmpeg "
                             "(it provides ffprobe) and retry.")
                     try:
-                        text, submitted, usage = _transcribe_one(path, spec, client, dur, language)
+                        # billing is folded into `bill` incrementally inside the
+                        # call; the returned submitted/usage are not needed here
+                        text, _submitted, _usage = _transcribe_one(
+                            path, spec, client, dur, language, acc=bill)
                     except TranscriptionError:
                         # message is safe by construction; surface as-is
                         raise
@@ -652,13 +682,10 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                     row["transcript"] = text
                     row["duration_seconds"] = dur
                     stats["transcribed"] += 1
-                    fresh = True
-                    # bill on what was submitted to OpenAI this run: token usage for
-                    # gpt-4o-*, duration for whisper-1. Keep both bases
-                    # (submitted_seconds includes the per-seam overlap) so the right
-                    # one is used per the model's billing mode below.
-                    billed_seconds += submitted
-                    _add_usage(run_usage, usage)
+                    # billing (token usage for gpt-4o-*, submitted seconds for
+                    # whisper-1) was folded into `bill` incrementally as each request
+                    # completed, so a mid-file failure still records the paid chunks;
+                    # the returned submitted/usage are not re-added here.
                     if cache_conn is not None:
                         cache_conn.execute(
                             "INSERT OR REPLACE INTO transcripts VALUES (?,?,?,?)",

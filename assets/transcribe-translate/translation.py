@@ -289,6 +289,9 @@ def _write_csv_atomic(output_path: str, fieldnames: list[str], rows: list[dict])
 
 
 def _cache_connect(cache_path: str) -> sqlite3.Connection:
+    # create parent dirs like the output path does, so a nested --cache path
+    # (e.g. runs/cache.db) does not fail with "unable to open database file"
+    Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(cache_path, timeout=30)
     _restrict_cache_permissions(cache_path)
     try:
@@ -364,13 +367,16 @@ def _usage_tokens(resp) -> tuple[int, int] | None:
 
 def _translate_batch(client, texts: list[str], target_language: str,
                      source_language: str | None, model_id: str,
-                     max_retries: int) -> tuple[list[str], tuple[int, int] | None]:
+                     max_retries: int, on_usage) -> list[str]:
     """Translate a batch via OpenAI chat with strict length-validated JSON output.
 
-    Returns ``(translations, usage)`` where ``usage`` is ``(prompt_tokens,
-    completion_tokens)`` or None when the response carries no usage. Raises a
-    sanitized RuntimeError on persistent failure or if the model will not return
-    exactly len(texts) translations; never silently truncates.
+    Returns the list of translations. ``on_usage`` is called with each completed
+    response's usage (``(prompt_tokens, completion_tokens)`` or None) the moment the
+    API returns, BEFORE the content is validated, so a billed-but-malformed response
+    (wrong length/type) that is then retried or fails still has its usage recorded:
+    the user is charged per API response, not per valid one. Raises a sanitized
+    RuntimeError on persistent failure or if the model will not return exactly
+    len(texts) translations; never silently truncates.
     """
     src = f" The source language is {source_language}." if source_language else ""
     system = (
@@ -394,6 +400,9 @@ def _translate_batch(client, texts: list[str], target_language: str,
                 messages=[{"role": "system", "content": system},
                           {"role": "user", "content": user}],
             )
+            # record billing for this response immediately: OpenAI charges for the
+            # call regardless of whether the payload below turns out valid
+            on_usage(_usage_tokens(resp))
             content = resp.choices[0].message.content
             data = json.loads(content)
             out = data.get("translations")
@@ -407,7 +416,7 @@ def _translate_batch(client, texts: list[str], target_language: str,
                 # translation. Treat it as retryable so the model can correct it.
                 raise _LengthMismatch(
                     "model returned a non-string translation item")
-            return out, _usage_tokens(resp)
+            return out
         except Exception as exc:
             attempt += 1
             if attempt > max_retries or not _is_retryable(exc):
@@ -472,20 +481,36 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
     have_usage = True
     _spend_done = False
 
+    def _record_usage(usage: tuple[int, int] | None) -> None:
+        """Fold one API response's token usage into the run totals as soon as the
+        response returns. Called for every billed response, including ones whose
+        payload later fails validation, so spend is never lost when a batch errors."""
+        nonlocal tok_in_total, tok_out_total, have_usage
+        if usage is None:
+            have_usage = False
+        else:
+            tok_in_total += usage[0]
+            tok_out_total += usage[1]
+
     def _finalize_spend() -> None:
         """Record spend for whatever was billed, exactly once. The user is charged
-        per successful batch, so this must run before re-raising a mid-run failure
-        too, not only on the happy path."""
+        per API response, so this must run before re-raising a mid-run failure too,
+        not only on the happy path."""
         nonlocal _spend_done
         if _spend_done:
             return
         _spend_done = True
-        if stats["cells_translated"] > 0:
-            if have_usage and (tok_in_total or tok_out_total):
+        billed_tokens = tok_in_total or tok_out_total
+        if stats["cells_translated"] > 0 or billed_tokens:
+            # token usage is exact; prefer it whenever any response reported it. The
+            # cells_translated==0 case is a run that billed responses but completed
+            # no cells (every batch failed validation): still bill the real tokens.
+            if billed_tokens and (have_usage or stats["cells_translated"] == 0):
                 actual_usd = (tok_in_total / 1e6 * rate["in_per_mtok"]
                               + tok_out_total / 1e6 * rate["out_per_mtok"])
                 units = f"{tok_in_total + tok_out_total:,} tokens"
             else:
+                # responses carried no usage (e.g. a stub): char-based fallback.
                 # only unique strings are sent (duplicates resolve to the same
                 # translation), so the per-item overhead is counted per unique
                 # input, not per output cell. Otherwise duplicate text would be
@@ -538,13 +563,9 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
             chunk = pending[start:start + batch_size]
             if client_obj is None:
                 client_obj = _get_client(client)
-            results, usage = _translate_batch(client_obj, chunk, target_language,
-                                              source_language, model_id, max_retries)
-            if usage is None:
-                have_usage = False
-            else:
-                tok_in_total += usage[0]
-                tok_out_total += usage[1]
+            results = _translate_batch(client_obj, chunk, target_language,
+                                       source_language, model_id, max_retries,
+                                       _record_usage)
             for text, raw in zip(chunk, results):
                 stats["cells_translated"] += len(to_translate[text])
                 stats["chars_sent"] += len(text)
