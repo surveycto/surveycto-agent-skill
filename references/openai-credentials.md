@@ -57,8 +57,15 @@ contain key material.
 
 1. The `OPENAI_API_KEY` environment variable (OpenAI's standard convention; honored
    first, so a user with an existing setup needs no extra steps).
-2. The key stored in `~/.surveycto-skill/openai-config.json`.
-3. Otherwise it raises a clear error pointing here (with no key material).
+2. The key stored in `~/.surveycto-skill/openai-config.json` (written by the
+   optional `import-file` step).
+3. The key file the user edited, read directly: `~/.surveycto-skill/openai-key.txt`
+   (the default location), or `openai-key.txt` in the working directory. This is the
+   persistent store: set up once, read on every run from any directory.
+4. Otherwise it raises a clear error pointing here (with no key material).
+
+If a key file already exists, it is just used; nothing needs to be re-done. If not,
+coach the user to create one (below).
 
 Check setup state without revealing the key:
 
@@ -93,39 +100,46 @@ Do not have the user paste the key into the chat, and do not tell them to
 `export OPENAI_API_KEY=...` in their own terminal. In hosted/sandboxed runtimes
 (e.g. Cowork) the skill runs in an isolated environment that cannot see the
 user's terminal, so a shell `export` or `openai_auth.py set` in their terminal
-never reaches it; and anything typed in chat is logged. Use a file the user edits
-in the working folder:
+never reaches it; and anything typed in chat is logged. Use a key file the user
+edits, written by default to a hidden folder in their home directory
+(`~/.surveycto-skill/openai-key.txt`) so it persists and is found from any working
+directory after the first setup:
 
 1. Write the key file for them:
 
    ```
-   python3 assets/transcribe-translate/openai_auth.py template        # writes ./openai-key.txt with a placeholder
+   python3 assets/transcribe-translate/openai_auth.py template   # writes ~/.surveycto-skill/openai-key.txt
    ```
+
+   The command prints the exact path. Present that file to the user (or give them the
+   path) so they can open it.
 
 2. Tell the user, in chat:
 
-   > I created `openai-key.txt` in the working folder. Open it, replace the
-   > placeholder line with your OpenAI API key (`sk-...`), save, and tell me when
+   > I created the key file at `~/.surveycto-skill/openai-key.txt`. Open it, replace
+   > the placeholder line with your OpenAI API key (`sk-...`), save, and tell me when
    > it is ready. Do not paste the key into this chat.
 
-3. When they confirm, import it. This stores the key in the chmod-600 config and
-   deletes the file; it never prints the key:
+3. When they confirm, that is the whole setup. The skill reads the key directly from
+   that file (owner-only, chmod 600) on every run and reuses it. Confirm with
+   `status` (shows the source and a masked key, never the key):
 
    ```
-   python3 assets/transcribe-translate/openai_auth.py import-file openai-key.txt
+   python3 assets/transcribe-translate/openai_auth.py status
    ```
 
-Do not open, read, or `cat` `openai-key.txt` yourself; only run the import
-command. (Advanced/non-sandboxed users who already have the key in their
-environment can instead set `OPENAI_API_KEY`, which `configure_openai()` honors
-first.)
+   Optionally, `import-file <path>` also copies the key into the chmod-600 config.
 
-The protection here is concrete: the key is imported without the agent ever
-reading the file, and the file is deleted afterward. An operator who wants an
-extra layer can add their own `Read`-deny rule for the key file and config in
-their Claude Code permissions (`.claude/settings.json`); note that only gates the
-`Read` tool, not a `bash` read, so it is a backstop, not a guarantee. The skill
-does not generate those rules itself.
+Do not open, read, or `cat` the key file yourself; the skill reads it for you.
+(Advanced/non-sandboxed users who already have the key in their environment can
+instead set `OPENAI_API_KEY`, which `configure_openai()` honors first.)
+
+The key file lives in the home folder, outside any project, so it persists and is
+not in version control. If you instead place one in a working directory, keep it out
+of version control (the skill gitignores `openai-key.txt`). An operator
+who wants an extra layer can add their own `Read`-deny rule for the key file and
+config in their Claude Code permissions (`.claude/settings.json`); that only gates
+the `Read` tool, not a `bash` read, so it is a backstop, not a guarantee.
 
 ### Step 4: Install the client library
 
@@ -198,15 +212,14 @@ python3 assets/transcribe-translate/usage_ledger.py reset    # clears the histor
 ## Security checklist for generated scripts
 
 - [ ] Calls `openai_auth.configure_openai()`; never reads or prints the key value.
-- [ ] Onboards the key via the file handoff (`template` then `import-file`), never
-      via chat-paste or a terminal `export`; never opens/`cat`s the key file or
-      config. `import-file` deletes the temporary `openai-key.txt` after importing,
-      and the stored config lives outside any repo at
-      `~/.surveycto-skill/openai-config.json` (chmod 600), so it is never in
-      version control by virtue of its location. The `.gitignore` shipped in this
-      skill's source repo does not travel with the packaged skill, so do not rely
-      on it in the user's own workspace; if `openai-key.txt` lingers there, ensure
-      that project ignores it (or delete it).
+- [ ] Onboards the key via the file handoff (`template`, then the user edits and
+      saves), never via chat-paste or a terminal `export`; never opens/`cat`s the
+      key file or config. The key file (`openai-key.txt`, chmod 600) is the
+      persistent store, read directly each run so setup is once-only. The
+      `.gitignore` shipped in this skill's source repo does not
+      travel with the packaged skill, so in the user's own workspace ensure that
+      project ignores `openai-key.txt` (and any `~/.surveycto-skill` config is
+      already outside the repo by location).
 - [ ] Never writes the key into output CSVs, logs, a committed config, or chat.
 - [ ] Treats any cache file (it contains source text or transcripts) as
       sensitive: it is created chmod 0600, but place it (and output CSVs) outside

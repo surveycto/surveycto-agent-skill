@@ -42,6 +42,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import sqlite3
 import sys
 import tempfile
@@ -72,7 +73,20 @@ _PII_WARNING = (
 )
 
 _DEFAULT_BATCH_SIZE = 40
+# Cap each request by total source characters too, not just item count: a few large
+# cells (e.g. a transcript pasted as one cell) must not pack into one oversized
+# request the model cannot return a correct-length array for. ~8000 chars is a safe
+# input size well under the model limits.
+_MAX_BATCH_CHARS = 8000
+# Default per-segment size when translating a long document (see translate_document).
+_DEFAULT_SEGMENT_CHARS = 1200
 _MAX_RETRIES = 2
+# Default per-call work budget for resumable translation; see _DEFAULT_MAX_SECONDS
+# in transcription.py. Callers set it ~5s below their environment's command timeout.
+_DEFAULT_MAX_SECONDS = 40.0
+
+# Local, non-mounted cache location (mounted/network folders cannot host SQLite).
+LOCAL_CACHE_DIR = Path.home() / ".surveycto-skill" / "cache"
 
 _NON_RETRYABLE_TYPES = (TypeError, ValueError, KeyError, NotImplementedError)
 _NON_RETRYABLE_NAMES = frozenset({
@@ -288,7 +302,14 @@ def _write_csv_atomic(output_path: str, fieldnames: list[str], rows: list[dict])
         raise
 
 
-def _cache_connect(cache_path: str) -> sqlite3.Connection:
+def _fallback_cache_path(original: str) -> str:
+    """A deterministic local cache path for when ``original`` is on a filesystem that
+    cannot host SQLite. Same input maps to the same fallback, so resume still works."""
+    digest = hashlib.sha256(str(Path(original).resolve()).encode("utf-8")).hexdigest()[:16]
+    return str(LOCAL_CACHE_DIR / f"{digest}.db")
+
+
+def _cache_connect_at(cache_path: str) -> sqlite3.Connection:
     # create parent dirs like the output path does, so a nested --cache path
     # (e.g. runs/cache.db) does not fail with "unable to open database file"
     Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
@@ -308,10 +329,36 @@ def _cache_connect(cache_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _cache_connect(cache_path: str) -> sqlite3.Connection:
+    """Open the cache, falling back to a local path if the requested one is on a
+    filesystem SQLite cannot use (mounted/network folders raise 'disk I/O error' or
+    locking errors). The fallback is deterministic so resume across calls still works."""
+    try:
+        return _cache_connect_at(cache_path)
+    except (sqlite3.OperationalError, OSError):
+        fallback = _fallback_cache_path(cache_path)
+        if Path(fallback) == Path(cache_path):
+            raise
+        print(f"[cache] '{cache_path}' cannot host a SQLite cache (likely a mounted "
+              f"or network folder); using a local cache at {fallback}.", file=sys.stderr)
+        return _cache_connect_at(fallback)
+
+
+_NO_OPENAI_MSG = (
+    "the 'openai' package is not installed in this environment. Run "
+    "'python3 setup_env.py' first (it creates ~/.surveycto-skill/venv with the "
+    "pinned openai and socksio) and invoke this script with the venv interpreter "
+    "it prints."
+)
+
+
 def _get_client(client):
     if client is not None:
         return client
-    from openai import OpenAI  # noqa: PLC0415
+    try:
+        from openai import OpenAI  # noqa: PLC0415
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(_NO_OPENAI_MSG) from exc
     return OpenAI()
 
 
@@ -370,13 +417,11 @@ def _translate_batch(client, texts: list[str], target_language: str,
                      max_retries: int, on_usage) -> list[str]:
     """Translate a batch via OpenAI chat with strict length-validated JSON output.
 
-    Returns the list of translations. ``on_usage`` is called with each completed
-    response's usage (``(prompt_tokens, completion_tokens)`` or None) the moment the
-    API returns, BEFORE the content is validated, so a billed-but-malformed response
-    (wrong length/type) that is then retried or fails still has its usage recorded:
-    the user is charged per API response, not per valid one. Raises a sanitized
-    RuntimeError on persistent failure or if the model will not return exactly
-    len(texts) translations; never silently truncates.
+    Returns the list of translations. ``on_usage`` is called with each response's
+    usage (``(prompt_tokens, completion_tokens)`` or None) before its content is
+    validated, so a billed-but-malformed response still has its usage recorded (the
+    user is charged per response, not per valid one). Raises a sanitized
+    RuntimeError on persistent failure or a wrong-length result; never truncates.
     """
     src = f" The source language is {source_language}." if source_language else ""
     system = (
@@ -400,8 +445,8 @@ def _translate_batch(client, texts: list[str], target_language: str,
                 messages=[{"role": "system", "content": system},
                           {"role": "user", "content": user}],
             )
-            # record billing for this response immediately: OpenAI charges for the
-            # call regardless of whether the payload below turns out valid
+            # record billing before validating: OpenAI charges for the call whether
+            # or not the payload below turns out valid
             on_usage(_usage_tokens(resp))
             content = resp.choices[0].message.content
             data = json.loads(content)
@@ -427,18 +472,43 @@ def _translate_batch(client, texts: list[str], target_language: str,
             time.sleep(min(2 ** attempt, 30))
 
 
+def _next_batch(items: list[str], start: int, max_items: int,
+                max_chars: int) -> tuple[list[str], int]:
+    """Take the next batch from ``items[start:]`` bounded by both ``max_items`` and
+    ``max_chars`` of total source text. Always returns at least one item (even if it
+    alone exceeds ``max_chars``) so progress is always made. Returns (batch, next)."""
+    batch: list[str] = []
+    chars = 0
+    i = start
+    while i < len(items):
+        it = items[i]
+        if batch and (len(batch) >= max_items or chars + len(it) > max_chars):
+            break
+        batch.append(it)
+        chars += len(it)
+        i += 1
+    return batch, i
+
+
 def translate_csv(csv_path: str, columns: list[str], target_language: str,
                   source_language: str | None, output_path: str,
                   model: str | None = None, glossary_path: str | None = None,
                   cache_path: str | None = None, client=None, confirm: bool = False,
                   batch_size: int = _DEFAULT_BATCH_SIZE,
-                  max_retries: int = _MAX_RETRIES) -> dict:
+                  max_retries: int = _MAX_RETRIES,
+                  max_seconds: float | None = None) -> dict:
     """Translate ``columns`` in a CSV and write the result to ``output_path``.
 
     Adds a ``<column>_<target_language>`` column next to each source column; never
     overwrites. Skips skip-list cells. Caches raw translations (keyed on
     source/target language + model + text hash); the glossary is applied as a
-    re-runnable overlay on every resolution.
+    re-runnable overlay on every resolution. Batches are bounded by both item count
+    and total characters so a few large cells never form one oversized request.
+
+    With a ``max_seconds`` budget, a call translates until the budget is reached then
+    stops cleanly, leaving the rest for a resume pass: untranslated cells stay empty,
+    ``incomplete`` is True, and re-running the SAME command fills them from cache
+    without re-billing finished ones.
 
     :raises PermissionError: If ``confirm`` is not ``True``.
     """
@@ -474,17 +544,18 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
 
     cache_conn = _cache_connect(cache_path) if cache_path else None
     lang_key = source_language or "auto"
+    deadline = (time.monotonic() + max_seconds) if max_seconds else None
     stats = {"cells_translated": 0, "cells_cached": 0, "cells_skipped": 0,
-             "chars_sent": 0, "unique_sent": 0}
+             "chars_sent": 0, "unique_sent": 0, "cells_pending": 0,
+             "incomplete": False}
     tok_in_total = 0
     tok_out_total = 0
     have_usage = True
     _spend_done = False
 
     def _record_usage(usage: tuple[int, int] | None) -> None:
-        """Fold one API response's token usage into the run totals as soon as the
-        response returns. Called for every billed response, including ones whose
-        payload later fails validation, so spend is never lost when a batch errors."""
+        """Fold one response's token usage into the run totals, for every billed
+        response (even ones that later fail validation), so spend is never lost."""
         nonlocal tok_in_total, tok_out_total, have_usage
         if usage is None:
             have_usage = False
@@ -502,19 +573,15 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
         _spend_done = True
         billed_tokens = tok_in_total or tok_out_total
         if stats["cells_translated"] > 0 or billed_tokens:
-            # token usage is exact; prefer it whenever any response reported it. The
-            # cells_translated==0 case is a run that billed responses but completed
-            # no cells (every batch failed validation): still bill the real tokens.
+            # prefer exact token usage; cells_translated==0 means a run that billed
+            # responses but completed no cells, which still bills the real tokens
             if billed_tokens and (have_usage or stats["cells_translated"] == 0):
                 actual_usd = (tok_in_total / 1e6 * rate["in_per_mtok"]
                               + tok_out_total / 1e6 * rate["out_per_mtok"])
                 units = f"{tok_in_total + tok_out_total:,} tokens"
             else:
-                # responses carried no usage (e.g. a stub): char-based fallback.
-                # only unique strings are sent (duplicates resolve to the same
-                # translation), so the per-item overhead is counted per unique
-                # input, not per output cell. Otherwise duplicate text would be
-                # charged as if sent multiple times.
+                # no usage reported (e.g. a stub): char-based fallback. Overhead is
+                # per unique input (duplicates are sent once), not per output cell.
                 chars = stats["chars_sent"]
                 tok_in = chars / 4 + stats["unique_sent"] * 12
                 actual_usd = (tok_in / 1e6 * rate["in_per_mtok"]
@@ -559,13 +626,27 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
 
         client_obj = None
         pending = list(to_translate)
-        for start in range(0, len(pending), batch_size):
-            chunk = pending[start:start + batch_size]
+        idx = 0
+        batches_done = 0
+        max_batch_secs = 0.0
+        while idx < len(pending):
+            # adaptive budget guard: do not START a new batch unless it will plausibly
+            # finish in time (reserve the slowest batch seen, with margin), so a pass
+            # is never killed mid-batch. Always do at least one batch per call.
+            if deadline is not None and batches_done > 0:
+                now = time.monotonic()
+                if now >= deadline or now + max_batch_secs * 1.2 > deadline:
+                    stats["incomplete"] = True
+                    break
+            chunk, idx = _next_batch(pending, idx, batch_size, _MAX_BATCH_CHARS)
             if client_obj is None:
                 client_obj = _get_client(client)
+            t0 = time.monotonic()
             results = _translate_batch(client_obj, chunk, target_language,
                                        source_language, model_id, max_retries,
                                        _record_usage)
+            max_batch_secs = max(max_batch_secs, time.monotonic() - t0)
+            batches_done += 1
             for text, raw in zip(chunk, results):
                 stats["cells_translated"] += len(to_translate[text])
                 stats["chars_sent"] += len(text)
@@ -579,6 +660,10 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
                         (lang_key, target_language, model_id, _text_hash(text), raw))
             if cache_conn is not None:
                 cache_conn.commit()
+        if stats["incomplete"]:
+            # cells whose unique source was not reached this pass stay empty in the
+            # output; a resume pass fills them from cache
+            stats["cells_pending"] = sum(len(to_translate[t]) for t in pending[idx:])
 
         out_rows = []
         for i, row in enumerate(rows):
@@ -604,6 +689,129 @@ def translate_csv(csv_path: str, columns: list[str], target_language: str,
     return stats
 
 
+def _write_text_atomic(output_path: str, text: str) -> None:
+    """Write text atomically and owner-only (0600); a failed write never leaves a
+    truncated file and translated text is not world-readable."""
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(out.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, output_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _segment_text(text: str, max_chars: int) -> list[tuple[int, str]]:
+    """Split ``text`` into ``(paragraph_index, segment)`` pairs no larger than
+    ``max_chars``, preferring paragraph then sentence boundaries. Deterministic, so a
+    resume re-segments identically and reuses the cache. The paragraph index lets the
+    caller rejoin segments of the same paragraph when stitching the translation."""
+    paragraphs = re.split(r"\n\s*\n", text.strip())
+    out: list[tuple[int, str]] = []
+    for pi, para in enumerate(paragraphs):
+        para = para.strip()
+        if not para:
+            continue
+        if len(para) <= max_chars:
+            out.append((pi, para))
+            continue
+        cur = ""
+        for sentence in re.split(r"(?<=[.!?])\s+", para):
+            if cur and len(cur) + 1 + len(sentence) > max_chars:
+                out.append((pi, cur))
+                cur = sentence
+            else:
+                cur = f"{cur} {sentence}".strip() if cur else sentence
+        if cur:
+            out.append((pi, cur))
+    return out
+
+
+def _stitch_segments(segments: list[tuple[int, str]], translated: list[str]) -> str:
+    """Rejoin translated segments: segments of one source paragraph are joined with a
+    space, paragraphs with a blank line."""
+    paras: dict[int, list[str]] = {}
+    order: list[int] = []
+    for (pi, _src), tr in zip(segments, translated):
+        if pi not in paras:
+            paras[pi] = []
+            order.append(pi)
+        paras[pi].append(tr)
+    return "\n\n".join(" ".join(paras[pi]).strip() for pi in order).strip() + "\n"
+
+
+def _doc_segment_csv(text: str, segment_chars: int, dir_: str) -> tuple[str, list[tuple[int, str]]]:
+    """Write the document's segments to a one-column CSV in ``dir_`` and return
+    (csv_path, segments). The CSV is the input to translate_csv, reusing its caching,
+    budgeting, and billing."""
+    segments = _segment_text(text, segment_chars)
+    seg_csv = os.path.join(dir_, "segments.csv")
+    with open(seg_csv, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["segment"])
+        w.writeheader()
+        for _pi, s in segments:
+            w.writerow({"segment": s})
+    return seg_csv, segments
+
+
+def estimate_document_cost(input_path: str, target_language: str,
+                           model: str | None = None,
+                           segment_chars: int = _DEFAULT_SEGMENT_CHARS) -> dict:
+    """Estimate the cost of translating a long document (segments it the same way
+    translate_document does, then reuses the CSV estimate)."""
+    text = Path(input_path).read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory() as d:
+        seg_csv, segments = _doc_segment_csv(text, segment_chars, d)
+        est = estimate_cost(seg_csv, ["segment"], target_language, model)
+    est["segments"] = len(segments)
+    return est
+
+
+def translate_document(input_path: str, output_path: str, target_language: str,
+                       source_language: str | None = None, model: str | None = None,
+                       glossary_path: str | None = None, cache_path: str | None = None,
+                       client=None, confirm: bool = False,
+                       max_seconds: float | None = None,
+                       segment_chars: int = _DEFAULT_SEGMENT_CHARS,
+                       max_retries: int = _MAX_RETRIES) -> dict:
+    """Translate a long text/markdown document by segmenting it, translating the
+    segments (reusing translate_csv: cached, size-budgeted, resumable), and stitching
+    the result back into a document at ``output_path``.
+
+    This is the right path for long-form text (a transcript, a report): the per-cell
+    CSV translator cannot handle one giant cell, but a document of many small segments
+    translates cleanly. Resumable across calls via ``max_seconds`` and ``cache_path``;
+    re-run the SAME command until ``incomplete`` is False.
+
+    :raises PermissionError: If ``confirm`` is not ``True``.
+    """
+    if not confirm:
+        raise PermissionError(
+            "translate_document requires confirm=True. Run estimate_document_cost(), "
+            "show the user the cost and PII warning, and only proceed after confirmation.")
+    text = Path(input_path).read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory() as d:
+        seg_csv, segments = _doc_segment_csv(text, segment_chars, d)
+        seg_out = os.path.join(d, "segments_translated.csv")
+        stats = translate_csv(
+            seg_csv, ["segment"], target_language, source_language, seg_out,
+            model=model, glossary_path=glossary_path, cache_path=cache_path,
+            client=client, confirm=True, max_retries=max_retries, max_seconds=max_seconds)
+        with open(seg_out, newline="", encoding="utf-8") as f:
+            translated = [r.get(f"segment_{target_language}", "")
+                          for r in csv.DictReader(f)]
+    _write_text_atomic(output_path, _stitch_segments(segments, translated))
+    stats["output_path"] = output_path
+    stats["segments"] = len(segments)
+    return stats
+
+
 def _parse_columns(raw: str) -> list[str]:
     """Split a --columns value on commas, trimming surrounding whitespace so
     ``note, comment`` yields ``['note', 'comment']`` not ``['note', ' comment']``
@@ -616,15 +824,28 @@ def _parse_columns(raw: str) -> list[str]:
     return names
 
 
+_MAX_SECONDS_HELP = ("per-call work budget. Set it about 5s below your environment's "
+                     "per-command timeout (e.g. 40 for a 45s cap); default "
+                     f"{_DEFAULT_MAX_SECONDS:.0f}s. The call stops cleanly when reached "
+                     "and reports incomplete to resume. 0 runs to completion in one "
+                     "call (only on an uncapped host).")
+
+
 def _main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
-        description="Translate CSV columns via OpenAI. Run 'estimate' first to "
-                    "see cost and the privacy warning, then 'translate --confirm'.",
+        description="Translate via OpenAI. 'estimate'/'translate' work on CSV columns "
+                    "(many short cells); 'estimate-doc'/'translate-doc' work on a long "
+                    "text/markdown document. Run an estimate first, then the matching "
+                    "command with --confirm. If a run reports incomplete, re-run the "
+                    "SAME command to resume (cached work is not re-billed).",
         epilog="Examples:\n"
-               "  python translation.py estimate data.csv --columns notes,comment --target en\n"
-               "  python translation.py translate data.csv --columns notes,comment \\\n"
-               "      --target en --output data_en.csv --cache translation-cache.db --confirm\n"
-               "Omit --source to auto-detect each cell's language (handles mixed columns).",
+               "  python translation.py estimate data.csv --columns notes --target en\n"
+               "  python translation.py translate data.csv --columns notes \\\n"
+               "      --target en --output data_en.csv --confirm\n"
+               "  python translation.py translate-doc transcript.txt \\\n"
+               "      --target es --output transcript_es.txt --confirm\n"
+               "Omit --source to auto-detect. Resuming: keep the same --output and\n"
+               "--cache and re-run once per command (do not wrap in a shell loop).",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
     pe = sub.add_parser("estimate", help="show cell count, approx cost, and the PII warning")
@@ -640,24 +861,67 @@ def _main(argv: list[str]) -> int:
     pt.add_argument("--output", required=True, help="path for the result CSV (adds <col>_<target> columns)")
     pt.add_argument("--model", default=None, help="cheap (default, gpt-4.1-nano) | better")
     pt.add_argument("--glossary", default=None, help="optional CSV with source,target term overrides")
-    pt.add_argument("--cache", default=None, help="optional SQLite cache path so re-runs are cheap")
+    pt.add_argument("--cache", default=None,
+                    help="SQLite cache path; defaults to a local cache under ~/.surveycto-skill/cache")
     pt.add_argument("--confirm", action="store_true", help="required: confirms you accepted the cost/PII")
+    pt.add_argument("--max-seconds", type=float, default=_DEFAULT_MAX_SECONDS, help=_MAX_SECONDS_HELP)
+    ped = sub.add_parser("estimate-doc", help="cost/PII for translating a long text/markdown document")
+    ped.add_argument("input", help="path to the text/markdown file")
+    ped.add_argument("--target", required=True, help="target language ISO code")
+    ped.add_argument("--model", default=None, help="cheap (default) | better")
+    ped.add_argument("--segment-chars", type=int, default=_DEFAULT_SEGMENT_CHARS,
+                     help=f"max characters per segment (default {_DEFAULT_SEGMENT_CHARS})")
+    pdc = sub.add_parser("translate-doc", help="translate a long text/markdown document (chunked, resumable)")
+    pdc.add_argument("input", help="path to the text/markdown file to translate")
+    pdc.add_argument("--target", required=True, help="target language ISO code")
+    pdc.add_argument("--source", default=None, help="source language ISO code; omit to auto-detect")
+    pdc.add_argument("--output", required=True, help="path for the translated document")
+    pdc.add_argument("--model", default=None, help="cheap (default, gpt-4.1-nano) | better")
+    pdc.add_argument("--glossary", default=None, help="optional CSV with source,target term overrides")
+    pdc.add_argument("--cache", default=None,
+                     help="SQLite cache path; defaults to a local cache under ~/.surveycto-skill/cache")
+    pdc.add_argument("--segment-chars", type=int, default=_DEFAULT_SEGMENT_CHARS,
+                     help=f"max characters per segment (default {_DEFAULT_SEGMENT_CHARS})")
+    pdc.add_argument("--confirm", action="store_true", help="required: confirms you accepted the cost/PII")
+    pdc.add_argument("--max-seconds", type=float, default=_DEFAULT_MAX_SECONDS, help=_MAX_SECONDS_HELP)
     args = p.parse_args(argv)
+
     if args.cmd == "estimate":
         print(json.dumps(estimate_cost(args.csv_path, _parse_columns(args.columns),
                                        args.target, args.model), indent=2))
         return 0
-    if args.cmd == "translate":
+    if args.cmd == "estimate-doc":
+        print(json.dumps(estimate_document_cost(args.input, args.target, args.model,
+                                                args.segment_chars), indent=2))
+        return 0
+    if args.cmd in ("translate", "translate-doc"):
         if not args.confirm:
-            print("Refusing to translate without --confirm. Run 'estimate' first.",
-                  file=sys.stderr)
+            print("Refusing to translate without --confirm. Run the matching estimate "
+                  "first.", file=sys.stderr)
             return 1
+        # run cleanup (spend ledger, cache close) even if a wrapper sends SIGTERM
+        # before the self-imposed budget exits
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
         import openai_auth
         openai_auth.configure_openai()
-        print(json.dumps(translate_csv(
-            args.csv_path, _parse_columns(args.columns), args.target, args.source,
-            args.output, model=args.model, glossary_path=args.glossary,
-            cache_path=args.cache, confirm=True), indent=2))
+        cache = args.cache or str(LOCAL_CACHE_DIR / "translation-cache.db")
+        if args.cmd == "translate":
+            result = translate_csv(
+                args.csv_path, _parse_columns(args.columns), args.target, args.source,
+                args.output, model=args.model, glossary_path=args.glossary,
+                cache_path=cache, confirm=True, max_seconds=(args.max_seconds or None))
+        else:
+            result = translate_document(
+                args.input, args.output, args.target, args.source, model=args.model,
+                glossary_path=args.glossary, cache_path=cache, confirm=True,
+                max_seconds=(args.max_seconds or None), segment_chars=args.segment_chars)
+        print(json.dumps(result, indent=2))
+        if result.get("incomplete"):
+            print(f"\nNOTE: {result.get('cells_pending', 0)} item(s) not finished "
+                  "within the time budget. Re-run the SAME command to resume from the "
+                  "cache (finished items are not re-billed). Do not wrap it in a shell "
+                  "loop; run it once per command.", file=sys.stderr)
+            return 3  # distinct from success(0) and error(1): "resume me"
         return 0
     return 2
 

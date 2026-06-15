@@ -16,10 +16,10 @@ works for translation and transcription). The user-data translation primer
 Audio recordings carry respondents' voices and frequently spoken PII. The content
 must not pass through the agent's context, so the agent runs the shipped module
 [`assets/transcribe-translate/transcription.py`](../assets/transcribe-translate/transcription.py),
-which sends the audio to OpenAI and writes a transcripts CSV. The agent
-orchestrates and reports; it does not listen to or ingest the audio. (A natural
-follow-on: transcribe to a CSV, then translate the transcript column with
-[`user-data-translation.md`](user-data-translation.md).)
+which sends the audio to OpenAI and writes the transcripts. The agent orchestrates
+and reports; it does not listen to or ingest the audio. (A natural follow-on:
+transcribe with `--format txt`, then translate that document with the `translate-doc`
+command in [`user-data-translation.md`](user-data-translation.md).)
 
 ## Model selection (cheapest is the default)
 
@@ -76,20 +76,54 @@ word is cut at a boundary; the overlap's duplicated words are then removed when
 the pieces are stitched. That de-duplication can, rarely, collapse a word that was
 genuinely repeated right at a seam (a stutter) -- see the quality reminder.
 
+### Long audio: resumable passes under your command-timeout
+
+Transcribing a long file can take longer than a single shell command is allowed to
+run, and many environments hard-cap each command (some sandboxes as low as ~45s,
+and you usually cannot raise that cap). So the module makes durable progress and
+resumes instead of running as one unbounded job:
+
+- Each chunk is transcribed and cached on its own (`--cache`), so a finished chunk
+  is never transcribed or billed twice. The cache defaults to a local directory; do
+  not point it at a mounted/network folder (SQLite cannot lock there).
+- Each call does a bounded amount of new work (`--max-seconds`), then stops cleanly.
+  If a file did not finish, the JSON result has `"incomplete": true` and the process
+  exits with code 3.
+- To finish a long file, re-run the EXACT same command (same `--output` and
+  `--cache`) until the result shows `"incomplete": false`. Each pass resumes from
+  the cached chunks and only pays for new audio.
+
+First, know your cap. At the start of a media task, determine your environment's
+per-command (Bash) time limit from what you know about the environment you are
+running in. Then set `--max-seconds` to about 5 seconds below it. For example, if
+your commands are capped at 45 seconds, run with `--max-seconds 40`. Never set
+`--max-seconds` higher than 5 seconds below your cap, or a pass will be killed
+mid-chunk (wasting an already-billed request). If you genuinely run with no cap, you
+may use a large value for fewer passes, but the safe default fits a tight cap.
+
+Run ONE pass per command. If a command exits with code 3, run the SAME command
+again as a new command. Do NOT wrap it in a shell loop (`while ...; do`): the loop
+itself will be cut off by the command-timeout and orphan a running process. Do not
+background and poll either; some environments recycle background processes between
+turns.
+
 ## What the module gives you
 
 - `estimate_cost(audio_paths, model=None)` sums duration and returns the estimated
   USD cost, files whose duration could not be read in `unknown_duration`, and the
   PII warning.
 - `transcribe_files(audio_paths, output_path, model=None, cache_path=None,
-  confirm=False, language=None)` transcribes a batch and writes a CSV (`file`,
-  `transcript`, `backend`, `duration_seconds`, `status`). `language` is an optional
-  ISO-639-1 hint; omit to auto-detect.
+  confirm=False, language=None, max_seconds=None)` transcribes a batch and writes a
+  CSV (`file`, `transcript`, `backend`, `duration_seconds`, `status`). `language` is
+  an optional ISO-639-1 hint; omit to auto-detect. `max_seconds` bounds new work per
+  call for resumability (the CLI sets it; the library defaults to running to
+  completion). Returns counts `transcribed`, `cached`, `failed`, `pending`, and the
+  `incomplete` flag (true when files remain to resume).
 
 Built in: a confirm-gate cost check, per-file failure isolation (a bad file gets
-an error status; the batch continues), caching (keyed on file bytes + model so
-re-runs are free), automatic chunking, and sanitized errors (an API error never
-echoes audio content).
+an error status; the batch continues), chunk-level caching (keyed on file bytes +
+model + language so re-runs are free and long files resume), automatic chunking,
+and sanitized errors (an API error never echoes audio content).
 
 ## Workflow
 
@@ -100,29 +134,50 @@ echoes audio content).
    `VENV_PYTHON=<path>` line, and you run the module with that interpreter. Do not
    rely on a bare `pip install openai`, which fails with
    `externally-managed-environment` (PEP 668) on modern macOS and Debian/Ubuntu.
-   Transcription also needs `ffmpeg` on PATH.
-2. **Collect the audio paths.** SurveyCTO audio-audit and voice-response files are
-   usually in the media folder of an export.
-3. **Spoken language is auto-detected** by default, so this is optional. If the
+   The bootstrap also installs `socksio` (the OpenAI client needs it when egress is
+   routed through a SOCKS proxy, as some sandboxes do). Transcription also needs
+   `ffmpeg` on PATH. Some sandboxes reset their filesystem between sessions, so the
+   bootstrap may need re-running each session.
+2. **Collect the audio paths, and know your command-timeout.** SurveyCTO audio-audit
+   and voice-response files are usually in the media folder of an export. Determine
+   your environment's per-command (Bash) time limit so you can set `--max-seconds`
+   to about 5s below it (see "Long audio" above); default to `--max-seconds 40` if a
+   ~45s cap is likely.
+3. **Pick the output format by shape.** Many short clips (a dataset of audio audits
+   or voice responses, one row per respondent) -> `--format csv`, which joins back to
+   the data. A few long recordings -> `--format md` or `--format txt`, a readable
+   document; a long transcript in a CSV cell is unwieldy.
+4. **Spoken language is auto-detected** by default, so this is optional. If the
    user knows the language and wants slightly better accuracy/latency, pass it as
    an ISO-639-1 hint via `--language` (e.g. `--language sw`); omit it otherwise.
-4. **Offer the in-flight price check, then estimate cost and show the PII
+5. **Offer the in-flight price check, then estimate cost and show the PII
    warning.** First offer to check current OpenAI prices (see "Pricing and the
    in-flight price check"); refresh `pricing.json` if the user agrees. Then call
    `estimate_cost(...)` and show the total duration, estimated USD cost (noting it
    is approximate and as of `rates_as_of`), any `unknown_duration` files, and the
    privacy reminder that the audio is sent to OpenAI.
-5. **Wait for explicit confirmation** before transcribing.
-6. **Transcribe.** Call `transcribe_files(...)` with `confirm=True` and a
-   `cache_path` so re-runs are cheap.
-7. **Report, including spend.** Give the output CSV path and the stats
-   (transcribed, cached, failed). For OpenAI runs, always tell the user what this
-   run actually cost and the running total: report `actual_usd_display` ("this
+6. **Wait for explicit confirmation** before transcribing.
+7. **Transcribe, one pass per command, resuming if needed.** Run the CLI with
+   `--confirm` and `--max-seconds` set ~5s below your command-timeout. If the result
+   has `"incomplete": true` (exit code 3), run the SAME command again as a new
+   command, and keep going until it reports `"incomplete": false`. Never wrap it in a
+   shell loop and do not background it. Tell the user what is happening each pass
+   rather than going silent, e.g. "This recording is long, so I'm transcribing it in
+   resumable passes. Pass 2: 5 of 7 chunks done; continuing." Each pass only pays for
+   new audio.
+8. **Report, including spend.** Give the output path and the stats (transcribed,
+   cached, failed, and any still pending). For OpenAI runs, always tell the user what
+   this run actually cost and the running total: report `actual_usd_display` ("this
    run") and `total_spend_usd_display` ("total so far on this machine"), on every
-   paid run. This actual figure is the real post-run cost (token counts for the
-   gpt-4o-* models, duration for whisper-1), not the pre-run estimate. Mention any
-   files with an error status. Do not paste transcript content into chat unless
-   asked for specific rows.
+   paid run. When a long file took several passes, the meaningful figure is the
+   cumulative total across the passes. This actual figure is the real post-run cost
+   (token counts for the gpt-4o-* models, duration for whisper-1), not the pre-run
+   estimate. Mention any files with an error status. Do not paste transcript content
+   into chat unless asked for specific rows.
+9. **To translate the transcripts**, transcribe with `--format txt` (or `md`), then
+   use the document translator on that file (see
+   [`user-data-translation.md`](user-data-translation.md), the `translate-doc`
+   command). Do not feed a long transcript through the per-cell CSV translator.
 
 ### Running it: use the CLI
 
@@ -136,10 +191,19 @@ and ffmpeg/ffprobe must be on PATH.
 PY=<the VENV_PYTHON path from setup_env.py>
 # 1. estimate: shows known_seconds, estimated_usd_display, pii_warning -> show the user, get confirmation
 "$PY" assets/transcribe-translate/transcription.py estimate audio/r1.mp3 audio/r2.mp3
-# 2. transcribe (only after confirmation)
+# 2. transcribe (only after confirmation). Use --max-seconds set ~5s below your
+#    command-timeout (e.g. 40 for a 45s cap). Many short clips -> --format csv (joins
+#    back to a dataset); a few long recordings -> --format md or txt (readable doc).
 "$PY" assets/transcribe-translate/transcription.py transcribe audio/r1.mp3 audio/r2.mp3 \
-    --output transcripts.csv --cache transcription-cache.db --confirm
+    --output transcripts.csv --max-seconds 40 --confirm
 ```
+
+Exit code 3 means "incomplete, re-run to resume"; 0 means done. For a long file,
+issue the SAME command again as a new command each time it returns 3, until it
+returns 0. Run one command per pass; never put it in a `while` loop (the loop is cut
+off by the command-timeout and orphans a process). `--cache` defaults to a local
+path; only pass one explicitly if you want a specific location (not a mounted
+folder).
 
 Equivalent inside a generated Python script (run under the same interpreter). The
 helper modules live in the skill's `assets/transcribe-translate/` directory (whose
@@ -156,7 +220,10 @@ est = transcription.estimate_cost(["audio/r1.mp3","audio/r2.mp3"])
 stats = transcription.transcribe_files(
     ["audio/r1.mp3","audio/r2.mp3"], output_path="transcripts.csv",
     cache_path="transcription-cache.db", confirm=True)   # model="fast" by default
-print(stats["output_path"], stats["transcribed"], stats["cached"], stats["failed"])
+# library call defaults to running to completion; pass max_seconds=<n> to bound a
+# call and re-call while stats["incomplete"] is True to resume long files.
+print(stats["output_path"], stats["transcribed"], stats["cached"],
+      stats["failed"], stats["incomplete"])
 ```
 
 ## Caching
@@ -183,5 +250,6 @@ it is another reason to spot-check a chunked long-audio transcript.
 ## Out of scope
 
 - Speaker diarization, word-level timestamps, and streaming are not wired up here.
-- Translating transcripts is a separate step: transcribe to a CSV, then use
-  [`user-data-translation.md`](user-data-translation.md) on the transcript column.
+- Translating transcripts is a separate step: transcribe with `--format txt`, then
+  run the `translate-doc` command in
+  [`user-data-translation.md`](user-data-translation.md) on that file.

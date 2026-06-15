@@ -641,6 +641,81 @@ def test_nested_cache_path_is_created() -> None:
         assert s["cells_translated"] == 1 and cache.is_file(), s
 
 
+def test_size_budgeted_batches_never_oversized() -> None:
+    # a few large cells must not pack into one oversized request (the cause of the
+    # length-mismatch failure); each request stays within the char budget
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "x.csv"; out = Path(d) / "o.csv"
+        big = "palabra " * 800  # ~6400 chars, under the 8000 budget but two won't fit
+        _write(p, ["note"], [{"note": big + "uno"}, {"note": big + "dos"}, {"note": big + "tres"}])
+        c = FakeClient(transform=lambda xs: [x.upper() for x in xs])
+        T.translate_csv(str(p), ["note"], "en", "es", str(out), client=c, confirm=True)
+        assert c.completions.calls, "expected at least one request"
+        for batch in c.completions.calls:
+            assert len(batch) == 1, [len(b) for b in c.completions.calls]
+            assert sum(len(x) for x in batch) <= T._MAX_BATCH_CHARS or len(batch) == 1
+
+
+def test_translate_document_roundtrip() -> None:
+    # a long document translates by segmenting, then stitches back with paragraphs
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "doc.txt"; out = Path(d) / "doc_es.txt"
+        src.write_text(
+            "First paragraph here.\n\nSecond paragraph, two sentences. Indeed two.\n",
+            encoding="utf-8")
+        c = FakeClient(transform=lambda xs: [f"ES[{x}]" for x in xs])
+        s = T.translate_document(str(src), str(out), "es", source_language="en",
+                                 client=c, confirm=True)
+        text = out.read_text(encoding="utf-8")
+        assert s["incomplete"] is False and s["segments"] >= 2, s
+        assert "ES[" in text and "\n\n" in text  # translated, paragraphs preserved
+
+
+def test_translate_document_requires_confirm() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        src = Path(d) / "doc.txt"; src.write_text("Hola mundo.\n", encoding="utf-8")
+        try:
+            T.translate_document(str(src), str(Path(d) / "o.txt"), "en", client=FakeClient())
+        except PermissionError:
+            return
+        raise AssertionError("expected PermissionError without confirm")
+
+
+def test_translation_resumes_under_budget_without_rebilling() -> None:
+    # a budget-limited pass translates part, reports incomplete; a second pass resumes
+    # from cache and finishes. Each unique cell is translated exactly once.
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+    orig_mono = T.time.monotonic
+    class Clock:
+        def __init__(self, step): self.t = 0.0; self.step = step
+        def __call__(self): v = self.t; self.t += self.step; return v
+    calls = {"n": 0}
+    def transform(xs):
+        calls["n"] += len(xs)
+        return [f"EN[{x}]" for x in xs]
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "x.csv"; out = Path(d) / "o.csv"; cache = Path(d) / "c.db"
+            _write(p, ["note"], [{"note": f"hola {i}"} for i in range(6)])
+            # pass 1: tiny budget + advancing clock -> stops after the first batch
+            T.time.monotonic = Clock(10.0)
+            s1 = T.translate_csv(str(p), ["note"], "en", "es", str(out), client=FakeClient(transform),
+                                 cache_path=str(cache), confirm=True, batch_size=1, max_seconds=25)
+            assert s1["incomplete"] is True and s1["cells_pending"] > 0, s1
+            done1 = calls["n"]
+            assert 0 < done1 < 6, done1
+            # pass 2: no budget -> resume from cache, finish the rest
+            T.time.monotonic = orig_mono
+            s2 = T.translate_csv(str(p), ["note"], "en", "es", str(out), client=FakeClient(transform),
+                                 cache_path=str(cache), confirm=True, batch_size=1, max_seconds=None)
+            assert s2["incomplete"] is False, s2
+            assert calls["n"] == 6, calls  # each unique translated once across passes
+            r = _read(out)
+            assert all(row["note_en"].startswith("EN[") for row in r), r
+    finally:
+        T.time.monotonic = orig_mono
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

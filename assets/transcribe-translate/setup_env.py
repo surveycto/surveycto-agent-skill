@@ -47,6 +47,11 @@ VENV_DIR = Path.home() / ".surveycto-skill" / "venv"
 OPENAI_VERSION = "2.41.1"
 OPENAI_REQUIREMENT = f"openai=={OPENAI_VERSION}"
 
+# httpx (under the OpenAI client) needs socksio to reach a SOCKS proxy, as some
+# sandboxes route egress through; without it the first API call fails. It is tiny,
+# so install it unconditionally rather than guess whether the runtime is proxied.
+SOCKS_REQUIREMENT = "socksio"
+
 
 def _venv_python(venv_dir: Path) -> Path:
     """Path to the venv's interpreter (POSIX bin/, Windows Scripts/)."""
@@ -122,6 +127,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"openai {installed} present; installing pinned {OPENAI_VERSION}.",
                   flush=True)
         _pip_install(python, OPENAI_REQUIREMENT)
+
+    # SOCKS support for proxied sandboxes (see SOCKS_REQUIREMENT). Importing the
+    # module name confirms presence; the pip name and import name match.
+    if _installed_version(python, "socksio") is not None:
+        print("socksio already installed.", flush=True)
+    else:
+        _pip_install(python, SOCKS_REQUIREMENT)
 
     # Transcription needs ffmpeg on PATH; warn at setup time rather than only when a
     # transcription run fails.

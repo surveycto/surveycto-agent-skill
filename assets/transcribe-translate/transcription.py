@@ -40,10 +40,12 @@ import json
 import math
 import os
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pricing
@@ -58,6 +60,12 @@ _MAX_BYTES = 24 * 1024 * 1024          # OpenAI 25 MB request cap; use 24 for ma
 # (_transcribe_segment) for denser audio that still hits the token limit.
 _GPT4O_MAX_DURATION_SEC = 600          # 10 min initial window for gpt-4o-* models
 _MIN_SPLIT_SEC = 30.0                  # do not split a segment below this
+
+# Default per-call budget for new chunk work: the call stops cleanly when reached
+# and reports ``incomplete`` to resume, rather than being killed mid-chunk (which
+# wastes the in-flight, already-billed request). Callers raise it where longer
+# commands are allowed, for fewer passes.
+_DEFAULT_MAX_SECONDS = 40.0
 
 # Transcription model menu. Holds behaviour only (model id, billing basis,
 # chunking duration window); rates live in pricing.json (loaded via pricing.py)
@@ -338,7 +346,13 @@ def _transcribe_openai_file(path: str, model_id: str, client=None,
     with ``usage`` the normalised billing usage (see :func:`_resp_usage`).
     """
     if client is None:
-        from openai import OpenAI  # noqa: PLC0415
+        try:
+            from openai import OpenAI  # noqa: PLC0415
+        except ModuleNotFoundError as exc:
+            raise TranscriptionError(
+                "the 'openai' package is not installed. Run 'python3 setup_env.py' "
+                "first and use the venv interpreter it prints."
+            ) from exc
         client = OpenAI()
     with open(path, "rb") as fh:
         kwargs = {"model": model_id, "file": fh}
@@ -348,14 +362,19 @@ def _transcribe_openai_file(path: str, model_id: str, client=None,
     return (getattr(resp, "text", "") or ""), _resp_usage(resp)
 
 
-def _fits_whole(path: str, spec: dict) -> bool:
-    """Whether the file is within both the size and (model) duration limits."""
+def _fits_whole(path: str, spec: dict, dur: float | None = None) -> bool:
+    """Whether the file is within both the size and (model) duration limits.
+
+    ``dur`` may be passed when the caller already measured it, to avoid a second
+    ffprobe call; otherwise it is measured here.
+    """
     if os.path.getsize(path) > _MAX_BYTES:
         return False
     md = spec.get("max_duration_sec")
     if md is None:
         return True
-    dur = _audio_duration_seconds(path)
+    if dur is None:
+        dur = _audio_duration_seconds(path)
     if dur is None:
         return True  # cannot measure; size already fits, attempt whole
     return dur <= md
@@ -368,17 +387,14 @@ def _transcribe_segment(src: str, start: float, length: float, model_id: str,
     """Transcribe a [start, start+length] segment, splitting recursively if the
     model rejects it as too large (adapts to dense audio / token limits).
 
-    Returns ``(text, submitted_seconds, usage)``. ``submitted_seconds`` is the
-    audio actually sent to OpenAI summed across recursive splits, so it includes
-    the ~1s overlap re-sent at each seam (the duration-billing basis). ``usage`` is
-    the summed billing usage across the splits (token-billing basis for gpt-4o-*).
+    Returns ``(text, submitted_seconds, usage)``. ``submitted_seconds`` is the audio
+    sent to OpenAI summed across splits, including the ~1s overlap re-sent at each
+    seam (duration-billing basis); ``usage`` is the summed token usage (gpt-4o-*).
 
-    ``acc`` is an optional shared accumulator (``{"usage": <usage dict>, "seconds":
-    float}``). When supplied, each leaf folds its own billing into it the instant the
-    API call succeeds, so spend from completed chunks survives a later sibling
-    chunk's failure (the caller re-raises but still bills what was sent). Only leaves
-    fold, so a chunk is never double-counted; the returned values are independent of
-    ``acc`` and remain correct for direct callers that pass none.
+    ``acc`` is an optional shared accumulator (``{"usage": dict, "seconds": float}``).
+    When given, each leaf folds its billing in as its call succeeds, so spend from
+    done chunks survives a later sibling's failure. Only leaves fold (never
+    double-counted); the returned values are independent of ``acc``.
     """
     with tempfile.TemporaryDirectory() as d:
         seg = os.path.join(d, "seg.mp3")
@@ -406,31 +422,18 @@ def _transcribe_segment(src: str, start: float, length: float, model_id: str,
     return _stitch(lt, rt), ls + rs, usage
 
 
-def _transcribe_one(path: str, spec: dict, client, dur: float,
-                    language: str | None = None,
-                    acc: dict | None = None) -> tuple[str, float, dict]:
-    """Transcribe one file: single-request, or windowed + adaptive chunks.
+def _plan_chunks(path: str, dur: float, spec: dict) -> tuple[list[tuple[float, float]], bool]:
+    """Deterministic list of ``(start, length)`` windows to transcribe, plus a flag
+    saying whether the whole file fits one request.
 
-    ``dur`` is the file's measured duration (caller-required). Returns
-    ``(text, submitted_seconds, usage)``: ``submitted_seconds`` is the total audio
-    sent to OpenAI (for a chunked file it exceeds ``dur`` by the per-seam overlap),
-    and ``usage`` is the summed billing usage across all requests.
-
-    ``acc`` is the optional shared billing accumulator (see :func:`_transcribe_segment`).
-    When supplied, each successful request folds its billing into it immediately, so
-    a multi-chunk file that fails partway still bills the chunks that did complete.
+    The plan depends only on the file and model, so a window has the same identity
+    across runs and resume finds its cached chunk again. Windows are as large as a
+    request allows (model audio limit, or the size budget for a model with no
+    duration cap), minimising seams, and carry a 1s overlap so no word is lost at a
+    cut. A file that fits one request is a single seam-free window.
     """
-    if _fits_whole(path, spec):
-        try:
-            text, usage = _transcribe_openai_file(path, spec["id"], client, language)
-            if acc is not None:
-                _add_usage(acc["usage"], usage)
-                acc["seconds"] += dur
-            return text, dur, usage
-        except Exception as exc:
-            if not _is_too_large_error(exc):
-                raise
-            # otherwise fall through to chunking
+    if _fits_whole(path, spec, dur):
+        return [(0.0, dur)], True
     size = os.path.getsize(path)
     bytes_per_sec = size / dur if dur > 0 else 0
     window = 0.9 * _MAX_BYTES / bytes_per_sec if bytes_per_sec > 0 else dur
@@ -438,26 +441,36 @@ def _transcribe_one(path: str, spec: dict, client, dur: float,
     if md is not None:
         window = min(window, md)
     window = max(60.0, window)
-    parts: list[str] = []
-    submitted = 0.0
-    usage = _blank_usage()
     overlap = 1.0
+    plan: list[tuple[float, float]] = []
     start = 0.0
     while start < dur:
-        s = start if not parts else max(0.0, start - overlap)
+        s = start if not plan else max(0.0, start - overlap)
         length = min(window, dur - s)
-        ptext, psub, pusage = _transcribe_segment(path, s, length, spec["id"], client,
-                                                  language=language, acc=acc)
-        parts.append(ptext)
-        submitted += psub
-        _add_usage(usage, pusage)
+        plan.append((round(s, 3), round(length, 3)))
         start = s + length
         if length <= overlap:
             break
-    stitched = ""
-    for p in parts:
-        stitched = _stitch(stitched, p)
-    return stitched, submitted, usage
+    return plan, False
+
+
+def _transcribe_window(path: str, spec: dict, client, start: float, length: float,
+                       is_whole: bool, dur: float, language: str | None,
+                       bill: dict) -> str:
+    """Transcribe one planned window and fold its billing into ``bill``.
+
+    A whole-file window is sent as-is (no re-encode); a partial window is extracted
+    with ffmpeg and transcribed via the adaptive splitter so a still-too-large slice
+    is recursively divided. Returns the window's transcript text.
+    """
+    if is_whole:
+        text, usage = _transcribe_openai_file(path, spec["id"], client, language)
+        _add_usage(bill["usage"], usage)
+        bill["seconds"] += dur
+        return text
+    text, _sub, _usage = _transcribe_segment(path, start, length, spec["id"], client,
+                                             language=language, acc=bill)
+    return text
 
 
 # ---- cache ----------------------------------------------------------------
@@ -495,7 +508,20 @@ def _write_csv_atomic(output_path: str, fieldnames: list[str], rows: list[dict])
         raise
 
 
-def _cache_connect(cache_path: str) -> sqlite3.Connection:
+# Local, non-mounted cache location. SQLite needs file locking that mounted/network
+# folders (where a sandbox places the user's files) often do not provide, so caches
+# default and fall back here rather than next to the user's data.
+LOCAL_CACHE_DIR = Path.home() / ".surveycto-skill" / "cache"
+
+
+def _fallback_cache_path(original: str) -> str:
+    """A deterministic local cache path for when ``original`` is on a filesystem that
+    cannot host SQLite. Same input maps to the same fallback, so resume still works."""
+    digest = hashlib.sha256(str(Path(original).resolve()).encode("utf-8")).hexdigest()[:16]
+    return str(LOCAL_CACHE_DIR / f"{digest}.db")
+
+
+def _cache_connect_at(cache_path: str) -> sqlite3.Connection:
     # create parent dirs like the output path does, so a nested --cache path
     # (e.g. runs/cache.db) does not fail with "unable to open database file"
     Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
@@ -519,10 +545,34 @@ def _cache_connect(cache_path: str) -> sqlite3.Connection:
                 "CREATE TABLE transcripts ("
                 "file_hash TEXT NOT NULL, backend TEXT NOT NULL, language TEXT NOT NULL, "
                 "transcript TEXT NOT NULL, PRIMARY KEY (file_hash, backend, language))")
+        # per-chunk results for long files: each finished window is committed on its
+        # own (keyed by its [start, length)), so a timed-out run resumes from the
+        # last finished chunk and never re-bills one already done.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS transcript_chunks ("
+            "file_hash TEXT NOT NULL, backend TEXT NOT NULL, language TEXT NOT NULL, "
+            "chunk_start REAL NOT NULL, chunk_len REAL NOT NULL, transcript TEXT NOT NULL, "
+            "PRIMARY KEY (file_hash, backend, language, chunk_start, chunk_len))")
     except Exception:
         conn.close()
         raise
     return conn
+
+
+def _cache_connect(cache_path: str) -> sqlite3.Connection:
+    """Open the cache, falling back to a local path if the requested one is on a
+    filesystem SQLite cannot use. Network/mounted folders raise 'disk I/O error' or
+    locking errors; the fallback is deterministic (same input -> same path) so resume
+    across calls still works."""
+    try:
+        return _cache_connect_at(cache_path)
+    except (sqlite3.OperationalError, OSError):
+        fallback = _fallback_cache_path(cache_path)
+        if Path(fallback) == Path(cache_path):
+            raise
+        print(f"[cache] '{cache_path}' cannot host a SQLite cache (likely a mounted "
+              f"or network folder); using a local cache at {fallback}.", file=sys.stderr)
+        return _cache_connect_at(fallback)
 
 
 def _file_hash(path: str) -> str:
@@ -533,28 +583,78 @@ def _file_hash(path: str) -> str:
     return h.hexdigest()
 
 
+def _write_text_atomic(output_path: str, text: str) -> None:
+    """Write text atomically and owner-only (0600), mirroring _write_csv_atomic, so a
+    failed write never leaves a truncated file and transcripts are not world-readable."""
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(out.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, output_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _render_transcripts(rows: list[dict], fmt: str) -> str:
+    """Render result rows as a readable document. ``md`` uses a heading per file;
+    ``txt`` uses a plain separator. Long-form recordings read far better this way
+    than as one giant CSV cell."""
+    parts = []
+    for r in rows:
+        name = os.path.basename(r["file"])
+        meta = f'{r["backend"]}, {r["duration_seconds"]}s, {r["status"]}'
+        if fmt == "md":
+            parts.append(f"## {name}\n\n_{meta}_\n\n{r['transcript']}\n")
+        else:  # txt
+            parts.append(f"=== {name} ({meta}) ===\n{r['transcript']}\n")
+    sep = "\n---\n\n" if fmt == "md" else "\n\n"
+    head = "# Transcripts\n\n" if fmt == "md" else ""
+    return head + sep.join(parts) + "\n"
+
+
 # ---- public API -----------------------------------------------------------
 
 def transcribe_files(audio_paths: list[str], output_path: str,
                      model: str | None = None,
                      cache_path: str | None = None, confirm: bool = False,
-                     client=None, language: str | None = None) -> dict:
-    """Transcribe audio files and write a CSV of results.
+                     client=None, language: str | None = None,
+                     max_seconds: float | None = None,
+                     output_format: str = "csv") -> dict:
+    """Transcribe audio files and write the results.
 
-    Output columns: ``file``, ``transcript``, ``backend``, ``duration_seconds``,
-    ``status``. A file that errors gets an error token in ``status`` and an empty
-    transcript; the batch continues.
+    ``output_format`` ``csv`` (default) writes columns ``file``, ``transcript``,
+    ``backend``, ``duration_seconds``, ``status`` (one row per file, best for many
+    short clips that join back to a dataset). ``md``/``txt`` write a readable
+    document (best for a few long recordings). A file that errors gets an error
+    token in its status and an empty transcript; the batch continues.
+
+    Long files are split into durable, separately-cached chunks. With a
+    ``cache_path`` and a ``max_seconds`` budget, a single call does bounded work and
+    then stops cleanly, marking unfinished files ``incomplete`` in ``status`` and
+    setting ``incomplete: True`` in the result; re-running the SAME command resumes
+    from the cached chunks and never re-bills a finished one. This is how a file too
+    long to transcribe inside one command-timeout is completed across several calls.
 
     :param audio_paths: Paths to audio files.
     :param output_path: Where to write the results CSV.
     :param model: Menu name (``fast``/``accurate``/``whisper``) or model id.
-    :param cache_path: Optional SQLite cache path.
+    :param cache_path: Optional SQLite cache path. Required for resume across calls;
+        without it, each call starts the file from scratch.
     :param confirm: Must be ``True`` to run (cost gate).
     :param client: Optional injected client (testing).
     :param language: Optional ISO-639-1 hint (e.g. ``en``) forwarded to OpenAI to
         improve accuracy/latency; omit to let the model auto-detect.
-    :returns: Dict with ``transcribed``, ``cached``, ``failed``, ``backend``,
-        ``output_path``.
+    :param max_seconds: Per-call wall-clock budget for NEW chunk work. ``None``
+        (default) means run to completion in one call; set it (the CLI defaults it)
+        to make long files resumable under a command-timeout.
+    :returns: Dict with ``transcribed``, ``cached``, ``failed``, ``pending``,
+        ``incomplete``, ``backend``, ``output_path``.
     :raises PermissionError: If ``confirm`` is not ``True``.
     """
     if not confirm:
@@ -570,27 +670,27 @@ def transcribe_files(audio_paths: list[str], output_path: str,
     billing = spec.get("billing", "minute")
     lang_key = language or "auto"  # cache key: the hint changes the transcript
     cache_conn = _cache_connect(cache_path) if cache_path else None
-    stats = {"transcribed": 0, "cached": 0, "failed": 0,
+    deadline = (time.monotonic() + max_seconds) if max_seconds else None
+    stats = {"transcribed": 0, "cached": 0, "failed": 0, "pending": 0,
+             "incomplete": False, "chunks_done": 0, "chunks_total": 0,
              "backend": backend, "output_path": output_path,
              "rates_as_of": prov["last_verified"], "rates_source": prov["source"]}
     run_usage = _blank_usage()  # summed token/duration usage from responses
-    # shared billing accumulator: chunk/file helpers fold each completed request's
-    # usage and submitted seconds into it the instant the call returns, so spend
-    # from successful chunks is recorded even if a later chunk in the same file
-    # fails. ``seconds`` is the audio sent to OpenAI this run (duration basis).
+    # shared billing accumulator: each finished request folds its usage and seconds
+    # in immediately, so spend from done chunks survives a later chunk's failure.
+    # ``seconds`` is the audio sent to OpenAI this run (duration basis).
     bill = {"usage": run_usage, "seconds": 0.0}
     _spend_done = False
 
     def _finalize_spend() -> None:
-        """Record this run's real spend exactly once. The user is charged per paid
-        API call, so this must run even if a later step (e.g. the output CSV write)
-        fails after those calls, not only on the happy path.
+        """Record this run's real spend exactly once, even if a later step (e.g. the
+        output write) fails after paid calls.
 
-        Billing basis follows the model's mode, both confirmed live: gpt-4o-* are
-        token-billed, whisper-1 is duration-billed. If any paid call did not report
-        the usage its billing mode needs (a mixed/incomplete run), fall back to the
-        per-minute estimate for the whole run rather than billing only the calls
-        that reported, which would under-report real spend."""
+        Billing follows the model's mode: gpt-4o-* are token-billed, whisper-1 is
+        duration-billed. If a paid call did not report the usage its mode needs (a
+        mixed/incomplete run), fall back to the per-minute estimate for the whole
+        run rather than billing only the calls that reported, which would
+        under-report spend."""
         nonlocal _spend_done
         if _spend_done:
             return
@@ -637,60 +737,111 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                 if not os.path.isfile(path):
                     raise FileNotFoundError(f"No audio file at '{path}'.")
                 key = _file_hash(path)
-                cached = None
+                # fast path: the whole file was already stitched on a prior run
+                whole = None
                 if cache_conn is not None:
-                    cur = cache_conn.execute(
+                    hit = cache_conn.execute(
                         "SELECT transcript FROM transcripts WHERE file_hash=? AND "
-                        "backend=? AND language=?",
-                        (key, backend, lang_key))
-                    hit = cur.fetchone()
+                        "backend=? AND language=?", (key, backend, lang_key)).fetchone()
                     if hit is not None:
-                        cached = hit[0]
-                if cached is not None:
-                    row["transcript"] = cached
-                    stats["cached"] += 1
+                        whole = hit[0]
+                if whole is not None:
+                    row["transcript"] = whole
                     row["duration_seconds"] = _audio_duration_seconds(path)  # info only
-                else:
-                    # Require a measurable duration BEFORE the paid call so its cost
-                    # can be reported. Otherwise a file with unreadable duration (no
-                    # ffprobe) would be sent and then booked as $0.00, under-reporting
-                    # spend.
-                    dur = _audio_duration_seconds(path)
-                    if dur is None:
-                        raise TranscriptionError(
-                            "cannot measure this audio's duration (ffmpeg/ffprobe not "
-                            "found or unreadable file); it is required before a paid "
-                            "transcription so the cost can be reported. Install ffmpeg "
-                            "(it provides ffprobe) and retry.")
-                    try:
-                        # billing is folded into `bill` incrementally inside the
-                        # call; the returned submitted/usage are not needed here
-                        text, _submitted, _usage = _transcribe_one(
-                            path, spec, client, dur, language, acc=bill)
-                    except TranscriptionError:
-                        # message is safe by construction; surface as-is
-                        raise
-                    except Exception as exc:
-                        # blocked egress is common in locked-down environments; give
-                        # actionable guidance rather than an opaque name
-                        if _is_egress_error(exc):
-                            raise TranscriptionError(_NO_EGRESS_MSG) from None
-                        # sanitize: an API/library error could echo request content
-                        raise TranscriptionError(
-                            f"transcription failed ({type(exc).__name__})"
-                        ) from None
-                    row["transcript"] = text
-                    row["duration_seconds"] = dur
+                    stats["cached"] += 1
+                    rows.append(row)
+                    continue
+                # the per-call budget is spent: leave this file for a resume pass
+                # rather than starting work that would be cut off
+                if deadline is not None and time.monotonic() >= deadline:
+                    row["status"] = "pending: not started; re-run to resume"
+                    stats["pending"] += 1
+                    stats["incomplete"] = True
+                    rows.append(row)
+                    continue
+                # measure duration before any paid call so its cost can be reported;
+                # an unmeasurable file would otherwise be sent and booked as $0.00
+                dur = _audio_duration_seconds(path)
+                if dur is None:
+                    raise TranscriptionError(
+                        "cannot measure this audio's duration (ffmpeg/ffprobe not "
+                        "found or unreadable file); it is required before a paid "
+                        "transcription so the cost can be reported. Install ffmpeg "
+                        "(it provides ffprobe) and retry.")
+                row["duration_seconds"] = dur
+                plan, is_whole = _plan_chunks(path, dur, spec)
+                stats["chunks_total"] += len(plan)
+                try:
+                    texts: list[str] = []
+                    complete = True
+                    new_chunks = 0
+                    max_chunk_secs = 0.0  # slowest chunk this call, for the guard
+                    for (cs, cl) in plan:
+                        ctext = None
+                        if cache_conn is not None:
+                            chit = cache_conn.execute(
+                                "SELECT transcript FROM transcript_chunks WHERE "
+                                "file_hash=? AND backend=? AND language=? AND "
+                                "chunk_start=? AND chunk_len=?",
+                                (key, backend, lang_key, cs, cl)).fetchone()
+                            if chit is not None:
+                                ctext = chit[0]
+                        if ctext is None:
+                            # adaptive budget guard: do not START a new chunk unless
+                            # it will plausibly finish before the deadline (reserve
+                            # the slowest chunk seen, with margin), so a pass is never
+                            # killed mid-chunk. Always do at least one chunk per call
+                            # so progress is made.
+                            if deadline is not None and new_chunks > 0:
+                                now = time.monotonic()
+                                if now >= deadline or now + max_chunk_secs * 1.2 > deadline:
+                                    complete = False
+                                    break
+                            t0 = time.monotonic()
+                            ctext = _transcribe_window(path, spec, client, cs, cl,
+                                                       is_whole, dur, language, bill)
+                            max_chunk_secs = max(max_chunk_secs, time.monotonic() - t0)
+                            new_chunks += 1
+                            if cache_conn is not None:
+                                # commit each finished chunk on its own so a later
+                                # interruption keeps this durable progress
+                                cache_conn.execute(
+                                    "INSERT OR REPLACE INTO transcript_chunks "
+                                    "VALUES (?,?,?,?,?,?)",
+                                    (key, backend, lang_key, cs, cl, ctext))
+                                cache_conn.commit()
+                        texts.append(ctext)
+                    stats["chunks_done"] += len(texts)
+                except TranscriptionError:
+                    # message is safe by construction; surface as-is
+                    raise
+                except Exception as exc:
+                    if _is_egress_error(exc):
+                        raise TranscriptionError(_NO_EGRESS_MSG) from None
+                    # sanitize: an API/library error could echo request content
+                    raise TranscriptionError(
+                        f"transcription failed ({type(exc).__name__})") from None
+                if not complete:
+                    row["status"] = (f"incomplete: {len(texts)}/{len(plan)} chunks "
+                                     "done; re-run the same command to resume")
+                    stats["pending"] += 1
+                    stats["incomplete"] = True
+                    rows.append(row)
+                    continue
+                stitched = ""
+                for t in texts:
+                    stitched = _stitch(stitched, t)
+                row["transcript"] = stitched
+                if cache_conn is not None:
+                    cache_conn.execute(
+                        "INSERT OR REPLACE INTO transcripts VALUES (?,?,?,?)",
+                        (key, backend, lang_key, stitched))
+                    cache_conn.commit()
+                # a run that only stitched already-cached chunks billed nothing
+                if new_chunks > 0:
                     stats["transcribed"] += 1
-                    # billing (token usage for gpt-4o-*, submitted seconds for
-                    # whisper-1) was folded into `bill` incrementally as each request
-                    # completed, so a mid-file failure still records the paid chunks;
-                    # the returned submitted/usage are not re-added here.
-                    if cache_conn is not None:
-                        cache_conn.execute(
-                            "INSERT OR REPLACE INTO transcripts VALUES (?,?,?,?)",
-                            (key, backend, lang_key, text))
-                        cache_conn.commit()
+                else:
+                    stats["cached"] += 1
             except FileNotFoundError:
                 # never echo the path here; it is already in the `file` column
                 row["status"] = "error: audio file not found"
@@ -704,8 +855,11 @@ def transcribe_files(audio_paths: list[str], output_path: str,
                 row["status"] = f"error: {type(exc).__name__}"
                 stats["failed"] += 1
             rows.append(row)
-        _write_csv_atomic(output_path, ["file", "transcript", "backend",
-                                        "duration_seconds", "status"], rows)
+        if output_format in ("md", "txt"):
+            _write_text_atomic(output_path, _render_transcripts(rows, output_format))
+        else:
+            _write_csv_atomic(output_path, ["file", "transcript", "backend",
+                                            "duration_seconds", "status"], rows)
     except BaseException:
         # paid calls may already have incurred cost before a later failure (e.g. the
         # output write); record that real spend before propagating
@@ -722,12 +876,16 @@ def _main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
         description="Transcribe audio via OpenAI. Run 'estimate' first to see cost "
                     "and the privacy warning, then 'transcribe --confirm'. Long "
-                    "files are chunked automatically.",
+                    "files are split into cached chunks; if a run reports "
+                    "incomplete, re-run the SAME command to resume (cached chunks "
+                    "are not re-billed).",
         epilog="Examples:\n"
                "  python transcription.py estimate interview.mp3\n"
                "  python transcription.py transcribe interview.mp3 \\\n"
                "      --output transcripts.csv --cache transcription-cache.db --confirm\n"
                "Output CSV columns: file, transcript, backend, duration_seconds, status.\n"
+               "Resuming long files: keep the same --output and --cache and re-run\n"
+               "until the result shows \"incomplete\": false.\n"
                "Needs ffmpeg/ffprobe on PATH (duration + chunking).",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -739,10 +897,22 @@ def _main(argv: list[str]) -> int:
     pt.add_argument("--output", required=True, help="path for the results CSV")
     pt.add_argument("--model", default=None,
                     help="fast (default, gpt-4o-mini-transcribe) | accurate | whisper")
-    pt.add_argument("--cache", default=None, help="optional SQLite cache path so re-runs are free")
+    pt.add_argument("--cache", default=None,
+                    help="SQLite cache path so re-runs/resume are free; defaults to a "
+                         "local cache under ~/.surveycto-skill/cache")
+    pt.add_argument("--format", default="csv", choices=("csv", "md", "txt"),
+                    help="output format: csv (default, one row per file; best for many "
+                         "short clips) | md | txt (readable document; best for a few "
+                         "long recordings)")
     pt.add_argument("--language", default=None,
                     help="optional ISO-639-1 hint (e.g. en) to improve accuracy; omit to auto-detect")
     pt.add_argument("--confirm", action="store_true", help="required: confirms you accepted the cost/PII")
+    pt.add_argument("--max-seconds", type=float, default=_DEFAULT_MAX_SECONDS,
+                    help="per-call work budget for new chunks. Set it about 5s below "
+                         "your environment's per-command timeout (e.g. 40 for a 45s "
+                         f"cap); default {_DEFAULT_MAX_SECONDS:.0f}s. The call stops "
+                         "cleanly when reached and reports incomplete to resume. 0 "
+                         "runs to completion in one call (only on an uncapped host).")
     args = p.parse_args(argv)
 
     if args.cmd == "estimate":
@@ -753,11 +923,24 @@ def _main(argv: list[str]) -> int:
             print("Refusing to transcribe without --confirm. Run 'estimate' first "
                   "and confirm the cost with the user.", file=sys.stderr)
             return 1
+        # run cleanup (spend ledger, cache close) even if a wrapper sends SIGTERM
+        # before the self-imposed budget exits: turn it into a normal exit so the
+        # try/finally blocks run.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
         import openai_auth
         openai_auth.configure_openai()
-        print(json.dumps(transcribe_files(
+        cache = args.cache or str(LOCAL_CACHE_DIR / "transcribe-cache.db")
+        result = transcribe_files(
             args.audio_paths, args.output, model=args.model,
-            cache_path=args.cache, confirm=True, language=args.language), indent=2))
+            cache_path=cache, confirm=True, language=args.language,
+            max_seconds=(args.max_seconds or None), output_format=args.format)
+        print(json.dumps(result, indent=2))
+        if result.get("incomplete"):
+            print(f"\nNOTE: {result.get('pending', 0)} file(s) not finished within the "
+                  "time budget. Re-run the SAME command to resume from the cached "
+                  "chunks (already-done chunks are not re-billed). Do not wrap it in a "
+                  "shell loop; run it once per command.", file=sys.stderr)
+            return 3  # distinct from success(0) and error(1): "resume me"
         return 0
     return 2
 

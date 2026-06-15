@@ -659,6 +659,99 @@ def test_media_env_strips_openai_key() -> None:
             os.environ["OPENAI_API_KEY"] = orig
 
 
+def test_long_file_resumes_across_calls_without_rebilling() -> None:
+    # a long file split into chunks: a budget-limited first call does part of the
+    # work and reports incomplete; a second call resumes from the cached chunks and
+    # finishes. Each chunk is transcribed exactly once across both calls (no re-bill).
+    orig_d = X._audio_duration_seconds; orig_g = X.os.path.getsize
+    orig_ex = X._extract_chunk; orig_mono = X.time.monotonic
+    X._audio_duration_seconds = lambda p: 1800.0          # 30 min -> several windows
+    X.os.path.getsize = lambda p: 5_000_000
+    X._extract_chunk = lambda src, start, length, dst: open(dst, "wb").write(b"x" * 100)
+    _UL.LEDGER_PATH.unlink(missing_ok=True)
+
+    class Clock:
+        """Monotonic stand-in that advances a fixed step per call, so the per-call
+        budget trips deterministically without real sleeping."""
+        def __init__(self, step): self.t = 0.0; self.step = step
+        def __call__(self): v = self.t; self.t += self.step; return v
+
+    counter = {"n": 0}
+    def handler(data):
+        counter["n"] += 1
+        return f"part{counter['n']}"
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x")
+            out = Path(d) / "o.csv"; cache = Path(d) / "c.db"
+            # pass 1: small budget + advancing clock -> stops partway, stays resumable
+            X.time.monotonic = Clock(10.0)
+            s1 = X.transcribe_files([str(a)], str(out), cache_path=str(cache),
+                                    confirm=True, client=FakeClient(handler), max_seconds=25)
+            total = s1["chunks_total"]
+            assert total > 1, s1                      # the file really did split
+            assert s1["incomplete"] is True and s1["pending"] == 1, s1
+            assert s1["transcribed"] == 0, s1
+            done_pass1 = counter["n"]
+            assert 0 < done_pass1 < total, (done_pass1, total)  # partial progress only
+            assert "incomplete" in _read(out)[0]["status"], _read(out)[0]
+            # pass 2: no budget -> resumes cached chunks and completes
+            X.time.monotonic = orig_mono
+            s2 = X.transcribe_files([str(a)], str(out), cache_path=str(cache),
+                                    confirm=True, client=FakeClient(handler), max_seconds=None)
+            assert s2["incomplete"] is False and s2["transcribed"] == 1, s2
+            # total API calls == number of windows: cached chunks were not re-billed
+            assert counter["n"] == total, (counter, total)
+            text = _read(out)[0]["transcript"]
+            assert "part1" in text and _read(out)[0]["status"] == "ok", text
+    finally:
+        X._audio_duration_seconds = orig_d; X.os.path.getsize = orig_g
+        X._extract_chunk = orig_ex; X.time.monotonic = orig_mono
+
+
+def test_cache_falls_back_when_path_unwritable() -> None:
+    # a cache path on a filesystem that cannot host SQLite (mounted/network) must
+    # fall back to a deterministic local path, not crash
+    import sqlite3 as _sq
+    with tempfile.TemporaryDirectory() as d:
+        original = str(Path(d) / "mnt" / "c.db")
+        real = X._cache_connect_at
+        seen = []
+        def fake(p):
+            seen.append(p)
+            if Path(p) == Path(original):
+                raise _sq.OperationalError("disk I/O error")
+            return real(p)
+        X._cache_connect_at = fake
+        try:
+            conn = X._cache_connect(original)
+            assert conn is not None
+            assert Path(seen[-1]) == Path(X._fallback_cache_path(original)), seen
+            conn.close()
+            # deterministic: same input -> same fallback (so resume works)
+            assert X._fallback_cache_path(original) == X._fallback_cache_path(original)
+        finally:
+            X._cache_connect_at = real
+
+
+def test_transcribe_md_output() -> None:
+    # long-form output as a readable document, not a giant CSV cell
+    orig = X._audio_duration_seconds
+    X._audio_duration_seconds = lambda p: 30.0
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            a = Path(d) / "a.mp3"; a.write_bytes(b"x"); out = Path(d) / "o.md"
+            c = FakeClient(lambda data: "the well is dry")
+            X.transcribe_files([str(a)], str(out), confirm=True, client=c, output_format="md")
+            text = out.read_text(encoding="utf-8")
+            assert text.startswith("# Transcripts"), text[:40]
+            assert "the well is dry" in text and "a.mp3" in text
+            # it is a document, not CSV
+            assert "file,transcript,backend" not in text
+    finally:
+        X._audio_duration_seconds = orig
+
+
 def test_nested_cache_path_is_created() -> None:
     # a --cache path in a not-yet-existing subdirectory must be created, not error
     orig = X._audio_duration_seconds

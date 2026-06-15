@@ -64,7 +64,12 @@ real token counts.
   characters/cells and returns an approximate USD cost (token-based; de-dup makes
   the real cost lower) plus the PII warning.
 - `translate_csv(csv_path, columns, target_language, source_language, output_path,
-  model=None, glossary_path=None, cache_path=None, confirm=False)` is the workhorse.
+  model=None, glossary_path=None, cache_path=None, confirm=False, max_seconds=None)`
+  translates CSV columns (many short cells).
+- `translate_document(input_path, output_path, target_language, ...)` and
+  `estimate_document_cost(...)` translate a long text/markdown document by segmenting
+  it, translating the segments, and stitching them back. Use this for transcripts and
+  other long-form text; the per-cell CSV path cannot handle one giant cell.
 - `apply_glossary(text, glossary)` enforces preferred terminology.
 
 Built in:
@@ -73,9 +78,15 @@ Built in:
 - **Length-validated output.** Each batch is sent with a strict instruction to
   return exactly one translation per input as a JSON array; the length is checked
   and retried, so the model cannot silently drop or merge cells.
-- **Caching.** With a `cache_path`, raw translations are memoized (keyed on
-  source/target language, model, and a hash of the source text). Re-translating a
-  refreshed export only pays for changed cells.
+- **Caching and resume.** Translations are cached (keyed on source/target language,
+  model, and a hash of the source text); the cache defaults to a local directory (do
+  not point it at a mounted/network folder, where SQLite cannot lock). With a
+  `max_seconds` budget a call does bounded work then stops cleanly, reporting
+  `"incomplete": true` and exit code 3; re-run the SAME command to resume from cache
+  without re-billing. Set `--max-seconds` about 5s below your command-timeout (e.g.
+  40 for a 45s cap), and run one command per pass (never a shell loop).
+- **Size-bounded batches.** Each request is bounded by both item count and total
+  characters, so a few large cells never form one oversized request.
 - **De-duplication.** Identical source strings are translated once per run.
 - **Skip-list.** Empty cells, pure numbers, single letters, and survey codes
   (`N/A`, `999`, `-99`, ...) are never sent.
@@ -103,9 +114,13 @@ Built in:
    that the text is sent to OpenAI. Keep the privacy reminder on every run.
 5. **Wait for explicit confirmation.** Never translate without showing the cost
    first, even if the user said "just do it" up front.
-6. **Translate.** Call `translate_csv(...)` with `confirm=True` and a `cache_path`
-   so re-runs are cheap. Pass `source_language=None` to let the model auto-detect
-   per cell (handles mixed-language columns).
+6. **Translate, one pass per command.** Run the CLI `translate` with `--confirm` and
+   `--max-seconds` set ~5s below your command-timeout (e.g. 40 for a 45s cap). Omit
+   `--source` to auto-detect mixed-language columns. If the result is
+   `"incomplete": true` (exit code 3), run the SAME command again as a new command
+   until it reports `"incomplete": false`. Never wrap it in a shell loop and do not
+   background it. For a long document (a transcript), use `translate-doc` instead
+   (see "Long text" below).
 7. **Report, including spend.** Give the output path and the returned stats
    (translated, cached, skipped, chars sent). Always tell the user what this run
    actually cost and the running total: report `actual_usd_display` ("this run")
@@ -126,10 +141,31 @@ below is that path, and `translation.py` lives in the skill's
 PY=<the VENV_PYTHON path from setup_env.py>
 # 1. estimate: shows cells_to_translate, estimated_usd_display, pii_warning -> show the user, get confirmation
 "$PY" assets/transcribe-translate/translation.py estimate responses.csv --columns q_open,comments --target en
-# 2. translate (only after confirmation). Omit --source to auto-detect mixed-language columns.
+# 2. translate (only after confirmation). --max-seconds ~5s below your command-timeout
+#    (e.g. 40 for a 45s cap). Exit code 3 means "incomplete, re-run to resume"; 0 = done.
 "$PY" assets/transcribe-translate/translation.py translate responses.csv --columns q_open,comments \
-    --target en --output responses_en.csv --cache translation-cache.db --confirm
+    --target en --output responses_en.csv --max-seconds 40 --confirm
 ```
+
+`--cache` defaults to a local path; re-run the SAME command (one per pass, never a
+shell loop) until it returns 0.
+
+### Long text or transcripts: use `translate-doc`
+
+The CSV path is for many short cells. A long document (an audio transcript, a report)
+is one big piece of text, and must not go through the per-cell translator. Use the
+document mode, which segments the text, translates the segments (cached, resumable),
+and stitches them back into a document:
+
+```bash
+# estimate, then translate a long .txt/.md document (one pass per command; re-run on exit 3)
+"$PY" assets/transcribe-translate/translation.py estimate-doc transcript.txt --target es
+"$PY" assets/transcribe-translate/translation.py translate-doc transcript.txt \
+    --target es --output transcript_es.txt --max-seconds 40 --confirm
+```
+
+This is the path for the transcribe-then-translate flow: transcribe with
+`--format txt`, then `translate-doc` that file.
 
 Equivalent inside a generated Python script (run under the same interpreter). The
 helper modules live in the skill's `assets/transcribe-translate/` directory (whose

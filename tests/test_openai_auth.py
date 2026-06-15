@@ -32,30 +32,52 @@ def _fresh(tmp: Path) -> None:
     os.environ.pop("OPENAI_API_KEY", None)
 
 
-def test_key_file_handoff_imports_and_deletes() -> None:
-    import stat
+def test_key_file_is_read_directly_and_kept(monkeypatch=None) -> None:
+    # the persistent key file is the store: written once, read directly, never
+    # deleted, and resolvable on later runs without an import step
+    import stat, os as _os
     with tempfile.TemporaryDirectory() as d:
         _fresh(Path(d))
         kf = Path(d) / "openai-key.txt"
         auth.write_key_template(str(kf))
-        # template carries the placeholder and no real key
         tmpl = kf.read_text()
         assert "PASTE_YOUR_OPENAI_API_KEY_HERE" in tmpl and _FAKE not in tmpl
-        # importing while still a placeholder must refuse
+        # while still the placeholder, resolution finds no usable key
+        cwd = _os.getcwd(); _os.chdir(d)
         try:
-            auth.import_key_file(str(kf))
+            assert auth._read_key_file() is None  # placeholder is not a key
+            # user edits the file: now it resolves directly, no import, file kept
+            kf.write_text(f"# comment line\n{_FAKE}\n", encoding="utf-8")
+            assert auth._read_key_file() == _FAKE
+            assert auth._resolve_api_key() == _FAKE
+            assert kf.exists(), "key file must be kept (read directly, not deleted)"
+            # the template was created owner-only
+            assert stat.S_IMODE(kf.stat().st_mode) == 0o600, oct(kf.stat().st_mode)
+        finally:
+            _os.chdir(cwd)
+
+
+def test_import_is_optional_and_keeps_the_file() -> None:
+    # importing copies the key into the chmod-600 config but no longer deletes the
+    # key file by default
+    import stat
+    with tempfile.TemporaryDirectory() as d:
+        _fresh(Path(d))
+        kf = Path(d) / "openai-key.txt"
+        kf.write_text(f"# comment\n{_FAKE}\n", encoding="utf-8")
+        # placeholder still refuses
+        kf2 = Path(d) / "ph.txt"; auth.write_key_template(str(kf2))
+        try:
+            auth.import_key_file(str(kf2))
         except ValueError as exc:
             assert "placeholder" in str(exc).lower() and "sk-" not in str(exc)
         else:
             raise AssertionError("expected refusal on un-edited placeholder")
-        # user edits the file, then import: stores masked, deletes file, never echoes
-        kf.write_text(f"# comment line\n{_FAKE}\n", encoding="utf-8")
         masked = auth.import_key_file(str(kf))
         assert _FAKE not in masked and "THISisAfake" not in masked
-        assert not kf.exists(), "key file should be deleted after import"
-        assert auth._resolve_api_key() == _FAKE          # stored and resolvable
-        mode = stat.S_IMODE(auth.CONFIG_PATH.stat().st_mode)
-        assert mode == 0o600, oct(mode)
+        assert kf.exists(), "import must leave the key file in place"
+        assert auth._read_config_key() == _FAKE   # also stored in the config
+        assert stat.S_IMODE(auth.CONFIG_PATH.stat().st_mode) == 0o600
 
 
 def test_save_tightens_preexisting_loose_permissions() -> None:
@@ -191,7 +213,7 @@ def test_template_refuses_symlink_target() -> None:
 
 
 def test_import_refuses_symlink_target() -> None:
-    # importing through a symlink would let the overwrite/delete hit another file
+    # importing must not follow a symlink that could point at another file
     with tempfile.TemporaryDirectory() as d:
         _fresh(Path(d))
         real = Path(d) / "secret-config.json"
@@ -207,27 +229,48 @@ def test_import_refuses_symlink_target() -> None:
         assert real.read_text(encoding="utf-8") == '{"keep":"me"}\n'  # target untouched
 
 
-def test_import_reports_when_plaintext_cannot_be_removed() -> None:
-    # if the plaintext key file survives deletion, import must NOT report a clean
-    # success; it raises so the lingering key is surfaced
-    import stat as _stat
+def test_key_file_promoted_to_config_for_cwd_independence() -> None:
+    # a key found in a working-directory key file is promoted into the config, so a
+    # later command run from a different directory still resolves it
+    import os as _os
     with tempfile.TemporaryDirectory() as d:
         _fresh(Path(d))
-        sub = Path(d) / "ro"
-        sub.mkdir()
-        kf = sub / "openai-key.txt"
-        kf.write_text(_FAKE + "\n", encoding="utf-8")
-        os.chmod(sub, 0o500)  # read+exec only: file inside cannot be unlinked
+        a = Path(d) / "a"; a.mkdir()
+        (a / "openai-key.txt").write_text(f"# key\n{_FAKE}\n", encoding="utf-8")
+        cwd = _os.getcwd()
         try:
-            auth.import_key_file(str(kf))
-        except RuntimeError as exc:
-            assert "could not delete" in str(exc).lower()
-            assert _FAKE not in str(exc) and "sk-" not in str(exc)
-            assert auth._resolve_api_key() == _FAKE  # the key was still stored
-        else:
-            raise AssertionError("expected a cleanup error when the file cannot be removed")
+            _os.chdir(a)
+            assert auth._resolve_api_key() == _FAKE   # reads cwd key file...
+            assert auth._read_config_key() == _FAKE    # ...and promotes into config
         finally:
-            os.chmod(sub, 0o700)  # restore so the temp dir can be cleaned up
+            _os.chdir(cwd)
+        # from a different directory with no key file, the config still resolves it
+        b = Path(d) / "b"; b.mkdir()
+        try:
+            _os.chdir(b)
+            assert auth._resolve_api_key() == _FAKE
+        finally:
+            _os.chdir(cwd)
+
+
+def test_template_defaults_to_hidden_home_and_resolves_anywhere() -> None:
+    # the template (no explicit path) is written to the hidden home folder, and the
+    # key there resolves from any working directory
+    import io, os as _os
+    from contextlib import redirect_stdout
+    with tempfile.TemporaryDirectory() as d:
+        _fresh(Path(d))
+        with redirect_stdout(io.StringIO()):
+            auth._main(["template"])
+        kf = auth.default_key_path()
+        assert kf.is_file() and kf.parent == auth.CONFIG_DIR, kf
+        kf.write_text(f"{_FAKE}\n", encoding="utf-8")  # user pastes
+        cwd = _os.getcwd()
+        try:
+            _os.chdir(d)  # a directory with no local key file
+            assert auth._resolve_api_key() == _FAKE
+        finally:
+            _os.chdir(cwd)
 
 
 def main() -> int:

@@ -31,3 +31,9 @@ transcription-cache.db
 transcription-cache.sqlite
 *cache*.db
 *cache*.sqlite
+
+# Environment variables
+.env
+
+# OpenAI key handoff file
+openai-key.txt
