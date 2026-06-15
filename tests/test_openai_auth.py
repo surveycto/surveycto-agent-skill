@@ -253,6 +253,23 @@ def test_key_file_promoted_to_config_for_cwd_independence() -> None:
             _os.chdir(cwd)
 
 
+def test_save_refuses_symlinked_config_path() -> None:
+    # writing the secret must not follow a symlinked config path onto another file
+    with tempfile.TemporaryDirectory() as d:
+        _fresh(Path(d))
+        auth.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        target = Path(d) / "repo-config.json"
+        target.write_text("keep\n", encoding="utf-8")
+        auth.CONFIG_PATH.symlink_to(target)
+        try:
+            auth.save_api_key(_FAKE)
+        except ValueError as exc:
+            assert "symlink" in str(exc).lower() and "sk-" not in str(exc)
+            assert target.read_text(encoding="utf-8") == "keep\n"  # target untouched
+            return
+        raise AssertionError("expected refusal to write through a symlinked config")
+
+
 def test_template_defaults_to_hidden_home_and_resolves_anywhere() -> None:
     # the template (no explicit path) is written to the hidden home folder, and the
     # key there resolves from any working directory

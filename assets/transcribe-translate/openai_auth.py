@@ -68,10 +68,18 @@ def save_api_key(key: str) -> None:
             "string). Check the value and try again. (The key is not shown here.)"
         )
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    # Never write the secret through a symlinked config path: a planted link could
+    # redirect it into a repo or other unintended location. Reject it, and pass
+    # O_NOFOLLOW as a race-safe backstop so a final symlink component fails the open.
+    if CONFIG_PATH.is_symlink():
+        raise ValueError(
+            "Refusing to write the key config through a symlink. Remove "
+            f"'{CONFIG_PATH}' and retry. (The key is not shown here.)")
     # Create with 0600 at open time (os.open applies the mode on creation, masked
     # only by umask) so the key is never briefly world-readable between a
     # default-mode create and a later chmod. O_TRUNC replaces any existing file.
-    fd = os.open(CONFIG_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(CONFIG_PATH, flags, 0o600)
     # O_TRUNC does not reset the mode of a pre-existing file, so tighten it too.
     try:
         os.fchmod(fd, 0o600)
