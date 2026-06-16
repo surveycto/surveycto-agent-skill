@@ -553,6 +553,39 @@ def test_datalink_order_enforced():
     _expect("datalink-order" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
 
 
+@test
+def test_datalink_publish_partial_data_accepted():
+    # A definition the server itself exports ends the dataLink sequence with
+    # <publishPartialData> after <isAutoConfigured>; re-uploading it must not be
+    # flagged as an ordering error.
+    body = (
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>key</fieldNames>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f1</linkObjectId>"
+        '<fieldMap>{"a":"key"}</fieldMap>'
+        "<isAutoConfigured>false</isAutoConfigured>"
+        "<publishPartialData>false</publishPartialData>"
+        "</dataLink></dataLinks>")
+    r = _run_xml(_wrap(body))
+    _expect("datalink-order" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_datalink_publish_partial_data_bad_boolean_rejected():
+    # publishPartialData is an xs:boolean; a non-boolean value is rejected at XSD
+    # validation, the same as the other boolean-typed elements.
+    body = (
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>key</fieldNames>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f1</linkObjectId>"
+        "<publishPartialData>yes</publishPartialData>"
+        "</dataLink></dataLinks>")
+    r = _run_xml(_wrap(body))
+    _expect("xsd-boolean-lexical" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
 # ---------------------------------------------------------------------------
 # Long-format / unique-record-field scoping (no false positives)
 # ---------------------------------------------------------------------------

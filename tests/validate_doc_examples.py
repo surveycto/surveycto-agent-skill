@@ -63,6 +63,7 @@ CONTAINER_ORDER = {
         "joiningField",
         "relevanceField",
         "isAutoConfigured",
+        "publishPartialData",
     ],
 }
 
