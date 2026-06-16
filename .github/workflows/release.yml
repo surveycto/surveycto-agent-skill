@@ -16,6 +16,9 @@ jobs:
       - name: Install validation dependencies
         run: python3 -m pip install openpyxl==3.1.5 packaging
 
+      - name: Install ffmpeg (ffprobe for audio duration; chunking of long audio)
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Validate XLSX assets
         run: python3 tests/validate_xlsx_assets.py
 
@@ -24,6 +27,15 @@ jobs:
 
       - name: Validate doc examples
         run: python3 tests/validate_doc_examples.py
+
+      - name: Test translate/transcribe helpers (offline, no external deps)
+        run: |
+          python3 tests/test_openai_auth.py
+          python3 tests/test_translation.py
+          python3 tests/test_transcription.py
+          python3 tests/test_setup_env.py
+          python3 tests/test_usage_ledger.py
+          python3 tests/test_pricing.py
 
       - name: Test dataset validator
         run: python3 tests/test_dataset_validation.py

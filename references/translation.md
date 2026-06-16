@@ -17,7 +17,7 @@ Read this when the user wants to:
 
 Out of scope for this primer:
 
-- Translating data in *submissions* (response text, enumerator comments). That involves much larger volumes, sensitive respondent content, and an external translation API; it is a separate workflow.
+- Translating data in *submissions* (response text, enumerator comments). That involves much larger volumes, sensitive respondent content, and an external translation API; it is a separate workflow — see [`user-data-translation.md`](user-data-translation.md) (and [`openai-credentials.md`](openai-credentials.md) for the key setup).
 - Translating server dataset XML files, Data Explorer workbooks, or field plug-in UI strings — handled (when needed) in their own primers.
 - Generating translated audio/image media. The agent cannot produce these; the user provides them.
 
@@ -28,7 +28,7 @@ For form labels, the agent should translate directly. Form labels are:
 - **Low-volume.** A typical XLSForm has 50–500 labels; the whole form fits in your context.
 - **Non-sensitive.** No PII, no respondent data, no third-party data transfer concerns.
 - **Quality-sensitive in ways that benefit from contextual reasoning** — terminology consistency, register, idiomatic phrasing, cultural adaptation. A per-cell translation API cannot see the whole form at once.
-- **Free of credential setup.** No reason to push users into a Google Cloud Console workflow they shouldn't need.
+- **Free of credential setup.** No reason to push users into an external cloud-API setup they shouldn't need.
 
 This is different from translating *response data*, where volume can be large, content can be sensitive, and per-cell determinism is an asset. Don't confuse the two.
 
@@ -50,7 +50,7 @@ In the `choices` worksheet:
 
 In `settings`:
 
-- `form_title` only if the user wants the title localized (often yes). Some teams keep `form_title` in the working language for ops reasons — ask if unsure.
+- `form_title` has **no per-language mechanism** (no `form_title:Language` column); it is one fixed value. Keep it in the working language, or set it to the language that matters most. If the user wants per-language titles, say it is not supported and optionally record the translations in the glossary.
 
 ### Preserve verbatim — never translate
 
@@ -120,9 +120,22 @@ When you hand the form back, hand the glossary file back at the same time, and r
    - Items you flagged as ambiguous on the first pass
    This second pass costs little and meaningfully improves quality. It is the agent's analog of the TRAPD "Review" stage.
 6. **Back-translation spot check (routine; sample 5–10% of labels, plus anything you flagged).** Translate a sample of your target-language labels back to the source language *without looking at the original source*, then compare. Surface any meaningful discrepancies to the user — they're often the most revealing quality signal you can give. For very small forms (<50 labels) you can back-translate everything; for large forms, prioritize complex labels, constraint/required messages, and any item you weren't fully confident about.
-7. **Apply translations via the MCP tools.** Batch all related edits into one `xls_apply_patches` call. Add the new `label:Lang` column to `survey` and `choices`; add `hint:Lang`, `constraint message:Lang`, `required message:Lang` columns only where the corresponding base columns have content. Leave the new cell blank when the source cell is blank — don't fabricate text. Write the glossary Markdown file to disk alongside the workbook at the same time. See [`mcp.md`](mcp.md) for the relevant ops and language/column handling.
+7. **Apply translations.** With the SurveyCTO MCP tools, batch all related edits into one `xls_apply_patches` call: add the new `label:Lang` column to `survey` and `choices`; add `hint:Lang`, `constraint message:Lang`, `required message:Lang` columns only where the corresponding base columns have content. Leave the new cell blank when the source cell is blank (do not fabricate text). Write the glossary Markdown file to disk alongside the workbook at the same time. See [`mcp.md`](mcp.md) for the relevant ops. If the MCP tools are not connected, apply the edits with openpyxl instead; see [Applying without the MCP tools](#applying-without-the-mcp-tools-openpyxl-fallback).
 8. **Run the verification checklist** (below).
 9. **Export and hand back**, with the hand-off notes described in *Hand-off to the user*.
+
+## Applying without the MCP tools (openpyxl fallback)
+
+When the SurveyCTO MCP server is not connected, edit the workbook directly with openpyxl. Follow these rules, which avoid the traps that bite a hand-rolled script:
+
+- **Write to a fresh output path; never copy-then-overwrite.** Load the original upload and save to a new filename (for example `<name>_multilingual.xlsx`). Do NOT `cp` the source into the output folder and then save over that copy: many hosted/mounted folders allow creating a new file but block overwriting, `chmod`, or deleting an existing one, so the second save fails with `PermissionError: [Errno 13]` / "Operation not permitted". A single save to a not-yet-existing path sidesteps this.
+- **Preserve formulas.** Load with `openpyxl.load_workbook(path)` (the default keeps the `version` formula). Do not pass `data_only=True` (that would replace formulas with cached values). Never write to the `version` cell.
+- **Add a column per language per translatable field, only where the base has content.** For `survey`, add `label:Lang` and, where the base column has any content, `hint:Lang`, `constraint message:Lang`, `required message:Lang`. Iterate the actual header row to discover which of those base columns exist and are populated; do not hardcode "label and constraint message", since a form may have hints or required messages, and silently skipping them is a real miss. For `choices`, add `label:Lang`. Append new columns at the right; leave a target cell blank when its base cell is blank.
+- **Map rows by stable keys.** Match survey rows by the `name` column and choice rows by `(list_name, value)`, not by row index (rows can carry blank spacers and `end group` markers).
+- **Touch nothing you must preserve.** Do not modify `name`, `type`, choice `value`/`list_name`, `form_id`, `default_language`, `relevance`/`constraint`/`calculation` expressions, or appearance keywords. The default language stays in the unsuffixed base columns.
+- **Style new cells to match.** For each new header and cell, copy the font, fill, border, and alignment from the adjacent base column's cell so the added columns look native to the sheet.
+
+After saving, run the same verification checklist below against the output file.
 
 ## Workflow: update translations after source changes
 

@@ -18,3 +18,22 @@ __pycache__/
 
 # Kilo agent config
 .kilo/
+
+# OpenAI credentials (the API key is secret; never commit)
+openai-config.json
+*.openai-key
+openai-key.txt
+
+# Translation / transcription caches (contain source text or transcripts)
+translation-cache.db
+translation-cache.sqlite
+transcription-cache.db
+transcription-cache.sqlite
+*cache*.db
+*cache*.sqlite
+
+# Environment variables
+.env
+
+# OpenAI key handoff file
+openai-key.txt

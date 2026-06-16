@@ -1,0 +1,220 @@
+<!-- PRIMER: user-data-translation
+  STATUS: drafted 2026-06-13 -->
+
+# Translating user data (responses, comments, transcriptions)
+
+This primer covers translating columns of collected user data in exported CSV
+files (open-ended responses, enumerator notes, supervisor comments, audio
+transcriptions) into a common working language, using OpenAI.
+
+This is a different workflow from form-label translation. Read
+[`translation.md`](translation.md) for form labels; read this for user data:
+
+| | Form labels ([`translation.md`](translation.md)) | User data (this primer) |
+| --- | --- | --- |
+| Volume | Low (50-500 labels) | Can be very large |
+| Sensitivity | Non-sensitive | Often sensitive; may contain PII |
+| In conversation? | Yes, the agent translates directly | No, sent to an API by a script |
+| Backing service | The agent's own ability | OpenAI |
+| Credentials | None | An OpenAI API key ([`openai-credentials.md`](openai-credentials.md)) |
+
+Read [`openai-credentials.md`](openai-credentials.md) first: it covers how to
+authenticate without exposing the user's key, and how to coach a user who has
+not set one up.
+
+## Why this runs as a script, not in conversation
+
+User data is too sensitive to pass through the agent's context or the
+conversation logs, and there can be far too much of it to fit anyway. So the
+agent runs the shipped module
+[`assets/transcribe-translate/translation.py`](../assets/transcribe-translate/translation.py),
+which reads the CSV, sends the text to OpenAI, and writes the translated CSV to
+disk. The agent orchestrates and reports; it does not read the cells.
+
+## Model selection (cheapest is the default)
+
+Translation uses an OpenAI chat model. The user can pick:
+
+- `cheap` -> `gpt-4.1-nano` (DEFAULT; lowest cost, strong multilingual quality)
+- `better` -> `gpt-4o-mini` (slightly higher cost; use for nuanced/high-stakes text)
+
+Pass `--model cheap|better` (other model ids are rejected unless added to the
+model menu with a rate in `pricing.json`, so the estimate stays accurate). Present
+this choice to the user before running, defaulting to `cheap`: name the default and
+offer `better` for nuanced or high-stakes text, with the cost difference. Keep it to
+one offer, not an interrogation; proceed with `cheap` if they have no preference.
+
+### Pricing and the in-flight price check
+
+OpenAI publishes no pricing API, so the token rates live in
+`assets/transcribe-translate/pricing.json` with the date they were last verified.
+At the start of a run, offer to check current prices online so the estimate is
+accurate: "May I check OpenAI's current prices to estimate the cost? Otherwise
+I'll use the stored rates from <rates_as_of>." If the user agrees, read the
+pricing page (`pricing_source_url`) and update with
+`pricing.py set-translation <model_id> --in-per-mtok ... --out-per-mtok ...
+--as-of <today>`; if they decline, use the stored rates. Either way, tell the user
+which rates were used and as of when (`estimate_cost` returns `rates_as_of` and
+`rates_source`). The pre-run estimate is approximate (de-duplication usually makes
+it lower); the actual spend reported after the run is computed from the response's
+real token counts.
+
+## What the module gives you
+
+- `estimate_cost(csv_path, columns, target_language, model=None)` counts billable
+  characters/cells and returns an approximate USD cost (token-based; de-dup makes
+  the real cost lower) plus the PII warning.
+- `translate_csv(csv_path, columns, target_language, source_language, output_path,
+  model=None, glossary_path=None, cache_path=None, confirm=False, max_seconds=None)`
+  translates CSV columns (many short cells).
+- `translate_document(input_path, output_path, target_language, ...)` and
+  `estimate_document_cost(...)` translate a long text/markdown document by segmenting
+  it, translating the segments, and stitching them back. Use this for transcripts and
+  other long-form text; the per-cell CSV path cannot handle one giant cell.
+- `apply_glossary(text, glossary)` enforces preferred terminology.
+
+Built in:
+- **Cost gate.** `translate_csv` refuses to run unless `confirm=True`. Always call
+  `estimate_cost` and confirm with the user first.
+- **Length-validated output.** Each batch is sent with a strict instruction to
+  return exactly one translation per input as a JSON array; the length is checked
+  and retried, so the model cannot silently drop or merge cells.
+- **Caching and resume.** Translations are cached (keyed on source/target language,
+  model, and a hash of the source text); the cache defaults to a local directory (do
+  not point it at a mounted/network folder, where SQLite cannot lock). With a
+  `max_seconds` budget a call does bounded work then stops cleanly, reporting
+  `"incomplete": true` and exit code 3; re-run the SAME command to resume from cache
+  without re-billing. Set `--max-seconds` about 5s below your command-timeout (e.g.
+  40 for a 45s cap), and run one command per pass (never a shell loop).
+- **Size-bounded batches.** Each request is bounded by both item count and total
+  characters, so a few large cells never form one oversized request.
+- **De-duplication.** Identical source strings are translated once per run.
+- **Skip-list.** Empty cells, pure numbers, single letters, and survey codes
+  (`N/A`, `999`, `-99`, ...) are never sent.
+- **Preserve originals.** A `<column>_<target_language>` column is added next to
+  each source column; it never overwrites, and refuses to run if that column
+  already exists.
+
+## Workflow
+
+1. **Confirm credentials and environment.** If a "no OpenAI API key configured"
+   error appears, switch to the coaching in
+   [`openai-credentials.md`](openai-credentials.md). Make sure the client library
+   is installed by running the bootstrap once (`python3 assets/transcribe-translate/setup_env.py`); it prints
+   a `VENV_PYTHON=<path>` line. Run the module with that interpreter. Do not rely
+   on a bare `pip install openai`, which fails with
+   `externally-managed-environment` (PEP 668) on modern macOS and Debian/Ubuntu.
+2. **Identify the columns** to translate (read only the header; you do not need to
+   read the data). Ask the user if unsure.
+3. **Get the target language** as an ISO 639-1 code (`en`, `es`, `fr`, `sw`, ...).
+4. **Offer the in-flight price check, then estimate cost and show the PII
+   warning.** First offer to check current OpenAI prices (see "Pricing and the
+   in-flight price check"); refresh `pricing.json` if the user agrees. Then call
+   `estimate_cost(...)` and show the cell count, the approximate USD cost (noting
+   it is approximate and as of `rates_as_of`), and the one-line privacy reminder
+   that the text is sent to OpenAI. Keep the privacy reminder on every run.
+5. **Wait for explicit confirmation.** Never translate without showing the cost
+   first, even if the user said "just do it" up front.
+6. **Translate, one pass per command.** Run the CLI `translate` with `--confirm` and
+   `--max-seconds` set ~5s below your command-timeout (e.g. 40 for a 45s cap). Omit
+   `--source` to auto-detect mixed-language columns. If the result is
+   `"incomplete": true` (exit code 3), run the SAME command again as a new command
+   until it reports `"incomplete": false`. Never wrap it in a shell loop and do not
+   background it. For a long document (a transcript), use `translate-doc` instead
+   (see "Long text" below).
+7. **Report, including spend.** Give the output path and the returned stats
+   (translated, cached, skipped, chars sent). Always tell the user what this run
+   actually cost and the running total: report `actual_usd_display` ("this run")
+   and `total_spend_usd_display` ("total so far on this machine"). This actual
+   figure is the real post-run cost from the response's token counts, not the
+   pre-run estimate. Do this on every paid run, not just the first. Do not paste
+   translated content into chat unless asked for specific rows.
+
+### Running it: use the CLI
+
+Prefer the CLI: it handles credentials itself (`configure_openai()`) and prints
+JSON you can report from. Run it with the interpreter that `setup_env.py` printed
+(`VENV_PYTHON=<path>`); `python3` alone will not have `openai` installed. `PY`
+below is that path, and `translation.py` lives in the skill's
+`assets/transcribe-translate/` directory.
+
+```bash
+PY=<the VENV_PYTHON path from setup_env.py>
+# 1. estimate: shows cells_to_translate, estimated_usd_display, pii_warning -> show the user, get confirmation
+"$PY" assets/transcribe-translate/translation.py estimate responses.csv --columns q_open,comments --target en
+# 2. translate (only after confirmation). --max-seconds ~5s below your command-timeout
+#    (e.g. 40 for a 45s cap). Exit code 3 means "incomplete, re-run to resume"; 0 = done.
+"$PY" assets/transcribe-translate/translation.py translate responses.csv --columns q_open,comments \
+    --target en --output responses_en.csv --max-seconds 40 --confirm
+```
+
+`--cache` defaults to a local path; re-run the SAME command (one per pass, never a
+shell loop) until it returns 0.
+
+### Long text or transcripts: use `translate-doc`
+
+The CSV path is for many short cells. A long document (an audio transcript, a report)
+is one big piece of text, and must not go through the per-cell translator. Use the
+document mode, which segments the text, translates the segments (cached, resumable),
+and stitches them back into a document:
+
+```bash
+# estimate, then translate a long .txt/.md document (one pass per command; re-run on exit 3)
+"$PY" assets/transcribe-translate/translation.py estimate-doc transcript.txt --target es
+"$PY" assets/transcribe-translate/translation.py translate-doc transcript.txt \
+    --target es --output transcript_es.txt --max-seconds 40 --confirm
+```
+
+This is the path for the transcribe-then-translate flow: transcribe with
+`--format txt`, then `translate-doc` that file.
+
+Equivalent inside a generated Python script (run under the same interpreter). The
+helper modules live in the skill's `assets/transcribe-translate/` directory (whose
+name has a hyphen, so it is not importable as a package); add it to `sys.path`
+before importing:
+
+```python
+import sys
+sys.path.insert(0, "assets/transcribe-translate")   # path to the skill's module dir
+import openai_auth, translation
+openai_auth.configure_openai()
+est = translation.estimate_cost("responses.csv", ["q_open","comments"], "en")
+# show est["estimated_usd_display"], est["cells_to_translate"], est["pii_warning"]; confirm
+stats = translation.translate_csv(
+    "responses.csv", ["q_open","comments"], target_language="en",
+    source_language=None, output_path="responses_en.csv",
+    cache_path="translation-cache.db", confirm=True)   # model="cheap" by default
+print(stats["output_path"], stats["cells_translated"], stats["cells_cached"])
+```
+
+## Glossary handling
+
+A glossary CSV (`source` + `target` or `target_<lang>` columns) enforces preferred
+renderings of recurring terms. It is applied **after** translation as a
+re-runnable overlay (the cache stores the raw translation, so changing the glossary
+does not force a re-translation). The match is case-insensitive and whole-word
+(bounded by word characters, so `id` will not touch `idea` and `case` will not
+touch `caseload`), longest terms first; it is not morphological, so curate the
+glossary accordingly (it does not handle inflected forms).
+
+```csv
+source,target_es,target_fr
+household roster,roster del hogar,liste des membres du ménage
+enumerator,encuestador,enquêteur
+```
+
+## Caching and re-runs
+
+Pass a `cache_path` (e.g. `translation-cache.db`) so re-translating a refreshed
+export only pays for changed cells. The cache stores the translated text keyed by
+a hash of the source (not the source text itself); the translations can still be
+sensitive. The module creates it chmod 0600, but it does not manage your version
+control: the `.gitignore` in this skill's source repo does not travel with the
+packaged skill, so in the user's own project place the cache (and the output CSV)
+outside any version-controlled folder, or add them to that project's ignore list.
+
+## Quality reminder
+
+Machine translation of open-ended data is a starting point, not a finished
+product. For anything driving analysis or reporting, recommend a fluent speaker
+spot-check a sample of the output. This is a recommendation, not a gate.

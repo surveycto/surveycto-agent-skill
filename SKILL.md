@@ -2,19 +2,19 @@
 name: surveycto
 description: >
   Design, edit, debug, and convert SurveyCTO forms (XLSForm .xlsx with
-  survey/choices/settings sheets), server datasets (.xml with a dataset
-  root element), Data Explorer workbook definitions, and field plug-ins
-  (.fieldplugin.zip bundles attached via `custom-name` appearances).
-  Covers form logic, expressions, choice lists, repeat groups, skip
-  patterns, constraints, calculations, dataset publishing, and case
-  management. Also covers converting forms from KoboToolbox/ODK
-  XLSForms, CommCare XForms XML, Qualtrics .qsf JSON, and other sources
-  into SurveyCTO XLSForms. Use when the user mentions SurveyCTO,
-  XLSForm, ODK-based forms, survey forms, or data collection forms;
-  when working with relevant .xlsx, .xml, or .fieldplugin.zip files;
-  or when converting a form from another platform. New XLSForms always
-  start from the bundled template at assets/xlsform-template.xlsx —
-  never built from scratch.
+  survey/choices/settings sheets), server datasets (.xml), Data Explorer
+  workbook definitions, and field plug-ins (.fieldplugin.zip bundles using
+  `custom-name` appearances). Covers form logic, expressions, choice lists,
+  repeat groups, skip patterns, constraints, calculations, dataset publishing,
+  and case management; converting forms from KoboToolbox/ODK XLSForms, CommCare
+  XForms XML, and Qualtrics .qsf JSON; and translating or transcribing exported
+  response data (open-ended answers, enumerator notes, audio-audit recordings,
+  voice responses) via cloud services. Use when the user mentions SurveyCTO,
+  XLSForm, ODK-based forms, survey forms, or data collection forms; works with
+  .xlsx, .xml, or .fieldplugin.zip files; converts a form from another platform;
+  or translates/transcribes exported SurveyCTO data or audio. New XLSForms
+  always start from the bundled template at assets/xlsform-template.xlsx, never
+  built from scratch.
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
@@ -457,6 +457,12 @@ In the dataset XML, add a `<dataLink>` with:
 | Plug-in answer not saved | `setAnswer` not called, or `select_multiple` value joined with commas | Wire input events to `setAnswer(value)`; for `select_multiple`, pass a **space**-separated list |
 | Plug-in attachments 404 at runtime | Files placed in subdirectories inside the zip | Flatten the zip — every file at the root, no duplicate basenames |
 
+## Translating and transcribing exported data (OpenAI)
+
+Separate from authoring forms: this skill can also **translate** open-ended response/comment columns in an exported CSV, and **transcribe** audio captures (audio audits, voice responses), via OpenAI. The data is high-volume and sensitive, so it must never enter the conversation or logs — a shipped script (`assets/transcribe-translate/`) sends it to OpenAI, chunking long audio automatically, and writes the result to a CSV. It needs an OpenAI API key (handled so its value is never printed) and outbound network access to `api.openai.com`.
+
+**Read [`references/openai-credentials.md`](references/openai-credentials.md) first** (key onboarding via a file handoff — never via chat — and how to enable network egress), then [`references/user-data-translation.md`](references/user-data-translation.md) for translation or [`references/audio-transcription.md`](references/audio-transcription.md) for audio. Always run the cost estimate and get explicit user confirmation before any paid API call, and report the actual and cumulative spend after each run. Rates live in `pricing.json` with the date they were last verified; at the start of a run, offer to check current OpenAI prices online (the user can decline, in which case stored rates are used), and tell the user which rates were used and as of when. The pre-run figure is an estimate; the reported spend is the real post-run cost (token counts for the token-billed models: translation's gpt-4.1-nano/gpt-4o-mini and transcription's gpt-4o-(mini-)transcribe; audio duration for whisper-1).
+
 ## References
 
 | Primer | When to read |
@@ -464,6 +470,9 @@ In the dataset XML, add a `<dataLink>` with:
 | [`references/overview.md`](references/overview.md) | First — orientation, file types, how they fit together |
 | [`references/xlsform.md`](references/xlsform.md) | **Mandatory before any XLSForm work** — column conventions, expressions, groups/repeats, multi-language |
 | [`references/translation.md`](references/translation.md) | Adding, updating, or verifying form-label translations — workflow, preserve-verbatim rules, glossary handling, self-review, back-translation spot check, verification checklist |
+| [`references/openai-credentials.md`](references/openai-credentials.md) | **Mandatory before user-data translation or audio transcription.** OpenAI API-key handling, the "never reveal the key" mandate, and user-coaching for OpenAI setup |
+| [`references/user-data-translation.md`](references/user-data-translation.md) | Translating collected data (responses, comments, transcriptions) in a CSV via OpenAI. Model selection (cheapest default), cost gate, PII warning, caching, skip-list, glossary, output columns |
+| [`references/audio-transcription.md`](references/audio-transcription.md) | Transcribing audio captures (audio audits, voice responses) via OpenAI. Model selection, automatic chunking of long audio, cost gate, PII warning, caching |
 | [`references/form-conversion.md`](references/form-conversion.md) | **Mandatory before any form conversion** — platform-agnostic workflow for converting form definitions from other data collection platforms into SurveyCTO XLSForms, including the universal mapping concerns, the conversion-report contract, and pointers to platform-specific references |
 | [`references/form-conversion-qualtrics.md`](references/form-conversion-qualtrics.md) | Converting a Qualtrics `.qsf` JSON export — `.qsf` anatomy, question-type / selector mapping, display-logic translation, flow/branch handling, gotchas |
 | [`references/form-conversion-kobo.md`](references/form-conversion-kobo.md) | Converting a KoboToolbox XLSForm `.xlsx` — expression rewrites, Kobo-specific extensions (`kobo--matrix`, `kobo--score`, `kobo--rank`), settings differences |

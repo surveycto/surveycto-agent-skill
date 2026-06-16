@@ -82,7 +82,7 @@ The server is the only channel that announces new skill releases, because skills
 - `start_xlsform_session` → `skill_advisory` with `latest_version`, `recommended_min_version`, `deprecated_below_version`, `download_url`, and a `note`.
 - `get_surveycto_mcp_capabilities` → `intended_skill.versions` (same three version fields), `intended_skill.download_url`, and `intended_skill.latest_updates`.
 
-When you see either, compare this skill's own version (the **Skill version** stated at the top of `SKILL.md`, currently `1.0.0-beta.4`) against those values and act:
+When you see either, compare this skill's own version (the **Skill version** stated at the top of `SKILL.md`; read it there rather than assuming a number, since it changes each release) against those values and act:
 
 1. **Below `deprecated_below_version`** → tell the user their installed SurveyCTO skill is deprecated and should be updated now, and give the `download_url`. Deprecated versions predate reliability fixes and may misbehave.
 2. **Below `recommended_min_version` (but not deprecated)** → mention that a newer skill version is available and offer to help update, with the `download_url`.

@@ -33,8 +33,12 @@ Claude Cowork runs skills inside a sandboxed code-execution environment that blo
 1. Open **Settings → Capabilities**.
 2. Confirm **Cloud code execution and file creation** is on (required for skills in general).
 3. Turn on **Allow network egress**.
-4. Under **Domain allowlist**, either select **All domains** or keep **Package managers only** and add `*.surveycto.net` to **Additional allowed domains**.
+4. Under **Domain allowlist**, either select **All domains** or keep **Package managers only** and add to **Additional allowed domains**:
+   - `*.surveycto.net` — for the SurveyCTO MCP server's XLSForm uploads/downloads.
+   - `api.openai.com` — only if you will use the **translate / transcribe exported data** workflows, which call OpenAI. Without it those workflows fail at the API call even though everything appears installed. (`openai` itself installs from PyPI, which the "Package managers only" default already allows.)
 5. **Start a new chat.** Egress changes do not reliably take effect for chats that are already in progress — the sandbox state for an in-flight session is sticky, and the agent can keep hitting network errors for the rest of that chat even after the setting is enabled.
+
+On **Team/Enterprise**, the domain allowlist is admin-controlled, so a workspace admin must add these domains under **Organization settings → Capabilities**.
 
 ## OpenAI Codex
 
