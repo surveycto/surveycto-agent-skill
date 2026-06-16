@@ -98,7 +98,7 @@ DEFINITION_REQUIRED = ["id", "title", "datasetType"]
 DATALINK_ORDER = [
     "dataLinkClass", "dataLinkType", "dataLinkState", "dataLinkFormat",
     "linkObjectId", "fieldMap", "joiningField", "relevanceField",
-    "isAutoConfigured",
+    "isAutoConfigured", "publishPartialData",
 ]
 DATALINK_REQUIRED = ["dataLinkClass", "dataLinkType", "linkObjectId"]
 
@@ -459,6 +459,7 @@ class DataLink:
         self.joining_field: Optional[str] = None
         self.relevance_field: Optional[str] = None
         self.is_auto_configured_raw: Optional[str] = None
+        self.publish_partial_data_raw: Optional[str] = None
         # Parsed field map as list of (formField, datasetField, updateLogicAction).
         self.field_map: Optional[list[FieldMapEntry]] = None
         self.field_map_error: Optional[str] = None
@@ -632,6 +633,8 @@ def _parse_data_link(dl_el, idx: int) -> DataLink:
             dl.relevance_field = _text(c)
         elif name == "isAutoConfigured":
             dl.is_auto_configured_raw = _text(c)
+        elif name == "publishPartialData":
+            dl.publish_partial_data_raw = _text(c)
     if dl.field_map_raw:
         try:
             dl.field_map = parse_field_map(dl.field_map_raw)
@@ -794,6 +797,9 @@ def _validate_xsd_booleans(ds: Dataset, report: Report) -> None:
     for dl in ds.data_links:
         if dl.is_auto_configured_raw is not None:
             checks.append((f"isAutoConfigured (dataLink[{dl.index}])", dl.is_auto_configured_raw,
+                           f"dataLink[{dl.index}]"))
+        if dl.publish_partial_data_raw is not None:
+            checks.append((f"publishPartialData (dataLink[{dl.index}])", dl.publish_partial_data_raw,
                            f"dataLink[{dl.index}]"))
     for name, value, loc in checks:
         # value is None only when the element is absent; a present-but-empty

@@ -47,6 +47,7 @@ Forms referenced in `<formLinks>` or `<dataLinks>` must be deployed before uploa
         <joiningField>unique_id</joiningField>       <!-- Optional: unique ID for upserts -->
         <relevanceField>filter</relevanceField>      <!-- Optional: publish only when =1 -->
         <isAutoConfigured>false</isAutoConfigured>   <!-- Optional: default false -->
+        <publishPartialData>false</publishPartialData> <!-- Optional: default false -->
       </dataLink>
     </dataLinks>
 
@@ -167,7 +168,7 @@ The `*` is required whether you publish in wide format or long format. What diff
 
 The children of `<dataLink>` are validated as an ordered sequence by the server schema. They must appear in exactly this order; any optional element you omit is simply skipped, but the ones you include cannot be reordered:
 
-`dataLinkClass`, `dataLinkType`, `dataLinkState`, `dataLinkFormat`, `linkObjectId`, `fieldMap`, `joiningField`, `relevanceField`, `isAutoConfigured`
+`dataLinkClass`, `dataLinkType`, `dataLinkState`, `dataLinkFormat`, `linkObjectId`, `fieldMap`, `joiningField`, `relevanceField`, `isAutoConfigured`, `publishPartialData`
 
 The common mistake is placing `joiningField` before `fieldMap`. That produces this upload error:
 
@@ -175,7 +176,7 @@ The common mistake is placing `joiningField` before `fieldMap`. That produces th
 cvc-complex-type.2.4.a: Invalid content was found starting with element 'fieldMap'. One of '{relevanceField, isAutoConfigured}' is expected.
 ```
 
-The fix is ordering only: move `fieldMap` ahead of `joiningField`. The error names `relevanceField` and `isAutoConfigured` because those are what the schema allows after `joiningField`, but neither is required. `fieldMap`, `joiningField`, `relevanceField`, and `isAutoConfigured` are all optional; only `dataLinkClass`, `dataLinkType`, and `linkObjectId` are required.
+The fix is ordering only: move `fieldMap` ahead of `joiningField`. The error names `relevanceField` and `isAutoConfigured` because those are what the schema allows after `joiningField`, but neither is required. `fieldMap`, `joiningField`, `relevanceField`, `isAutoConfigured`, and `publishPartialData` are all optional; only `dataLinkClass`, `dataLinkType`, and `linkObjectId` are required.
 
 ## Long format publishing
 
@@ -279,3 +280,4 @@ These are real behaviors the server applies that are easy to miss when authoring
 - **`allowOfflineUpdates` needs a unique record field.** Enabling offline updates requires a unique record field (forced to `id` for cases/enumerator datasets), and a subscription that supports offline publishing.
 - **Outgoing and cloud links are console-only.** `OUTGOING` links and the `SPREADSHEET`/`FUSION_TABLE` classes are configured in the console, not created by importing a dataset definition. `WEBHOOK`/`ZAPIER` are not in the import schema at all. Author only incoming `FORM` links in definitions.
 - **`isAutoConfigured` is server-generated.** Leave it `false` (or omit it). The auto-configured enumerator-link constraints are applied by the console, not the import path.
+- **`publishPartialData` is an optional boolean (default `false`).** The server writes it into definitions it exports and accepts it on import, so a downloaded definition that contains `<publishPartialData>` re-uploads cleanly. It is managed through the console; when authoring by hand, leave it `false` or omit it. It must appear last in the `<dataLink>` sequence, after `isAutoConfigured`.
