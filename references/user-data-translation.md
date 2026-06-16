@@ -39,9 +39,10 @@ Translation uses an OpenAI chat model. The user can pick:
 - `better` -> `gpt-4o-mini` (slightly higher cost; use for nuanced/high-stakes text)
 
 Pass `--model cheap|better` (other model ids are rejected unless added to the
-model menu with a rate in `pricing.json`, so the estimate stays accurate). Default
-to `cheap` and only suggest `better` if the user reports quality concerns on
-nuanced text.
+model menu with a rate in `pricing.json`, so the estimate stays accurate). Present
+this choice to the user before running, defaulting to `cheap`: name the default and
+offer `better` for nuanced or high-stakes text, with the cost difference. Keep it to
+one offer, not an interrogation; proceed with `cheap` if they have no preference.
 
 ### Pricing and the in-flight price check
 

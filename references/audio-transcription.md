@@ -32,6 +32,10 @@ Transcription model menu:
 Pass `--model fast|accurate|whisper` (other model ids are rejected unless added to
 the model menu with a rate in `pricing.json`, so the estimate stays accurate). The
 `~$/min` figures above are indicative; the live rates come from `pricing.json`.
+Present this choice to the user before running, defaulting to `fast`: name the
+default and offer `accurate`/`whisper` for harder audio, with the cost difference.
+Keep it to one offer, not an interrogation; proceed with `fast` if they have no
+preference.
 
 ### Pricing and the in-flight price check
 
