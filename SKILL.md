@@ -18,12 +18,12 @@ description: >
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
-  version: "1.0.0-beta.5"
+  version: "1.0.0-beta.6"
 ---
 
 # SurveyCTO Form, Plug-in, and Dataset Authoring
 
-**Skill version: 1.0.0-beta.5.** SurveyCTO MCP tool responses publish the current skill-version policy: `start_xlsform_session` returns a `skill_advisory`, and `get_surveycto_mcp_capabilities` returns `intended_skill.versions`. When you see one, compare it against this skill's version above (semantic-version ordering, pre-release aware) and act: if this version is below the response's `deprecated_below_version`, warn the user that their installed SurveyCTO skill is deprecated and should be updated now from the response's `download_url`; if it is below `recommended_min_version`, mention a newer version is available and offer to help update. Say nothing about versions when this skill is current, and raise it at most once per conversation. Skills do not auto-update, so this is the only update signal users get. See [`references/mcp.md`](references/mcp.md) for the exact comparison rules.
+**Skill version: 1.0.0-beta.6.** SurveyCTO MCP tool responses publish the current skill-version policy: `start_xlsform_session` returns a `skill_advisory`, and `get_surveycto_mcp_capabilities` returns `intended_skill.versions`. When you see one, compare it against this skill's version above (semantic-version ordering, pre-release aware) and act: if this version is below the response's `deprecated_below_version`, warn the user that their installed SurveyCTO skill is deprecated and should be updated now from the response's `download_url`; if it is below `recommended_min_version`, mention a newer version is available and offer to help update. Say nothing about versions when this skill is current, and raise it at most once per conversation. Skills do not auto-update, so this is the only update signal users get. See [`references/mcp.md`](references/mcp.md) for the exact comparison rules.
 
 SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
@@ -340,6 +340,7 @@ Dataset definitions are XML files with a `<dataset>` root element. They define c
 - Element names are **case-sensitive** (e.g., `otherUserCode`, not `otherUsercode`).
 - Forms in `<formLinks>` and `<dataLinks>` must be deployed before uploading the definition.
 - `<showColumnsWhenTable>` contains multiple `<columnNames>` child elements, not a comma-separated string.
+- **After creating or editing any dataset XML, validate and self-correct before delivering.** Run the bundled validator and fix what it reports. Read [`references/dataset-validation.md`](references/dataset-validation.md) for how to run it and how to act on its findings.
 
 **Full reference (read before any dataset XML work)**: [`references/datasets-xml.md`](references/datasets-xml.md).
 
@@ -470,6 +471,7 @@ In the dataset XML, add a `<dataLink>` with:
 | [`references/form-conversion-commcare.md`](references/form-conversion-commcare.md) | Converting a CommCare XForms `.xml` export — XForms anatomy, parsing helper, itext → `label:Lang`, case-management caveats |
 | [`references/expressions.md`](references/expressions.md) | Any expression work (relevance, constraint, calculation, choice_filter) |
 | [`references/datasets-xml.md`](references/datasets-xml.md) | Server dataset XML definitions |
+| [`references/dataset-validation.md`](references/dataset-validation.md) | **Run after authoring/editing any dataset XML** — validate the definition against the server's create/edit rules with the bundled `assets/dataset-validation/validate_dataset.py`, then self-correct |
 | [`references/data-explorer.md`](references/data-explorer.md) | Data Explorer dashboards |
 | [`references/field-plugins.md`](references/field-plugins.md) | Field plug-in authoring, packaging, form API, and testing |
 

@@ -20,6 +20,9 @@ jobs:
       - name: Validate doc examples
         run: python3 tests/validate_doc_examples.py
 
+      - name: Test dataset validator
+        run: python3 tests/test_dataset_validation.py
+
       - name: Build zip
         run: |
           zip -r surveycto-skill-dev.zip SKILL.md references assets \

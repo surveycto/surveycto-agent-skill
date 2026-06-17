@@ -1,0 +1,982 @@
+#!/usr/bin/env python3
+"""Standalone tests for assets/dataset-validation/validate_dataset.py.
+
+Run directly (no pytest needed, matching this repo's test style):
+    python3 tests/test_dataset_validation.py
+Exits non-zero on the first failure.
+
+openpyxl is imported unconditionally so the form-extraction tests fail loudly if
+the dependency is missing, rather than silently skipping coverage.
+"""
+
+from __future__ import annotations
+
+import sys
+import tempfile
+import warnings
+from pathlib import Path
+
+import openpyxl  # noqa: F401 - hard dependency for the form-extraction tests
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "assets" / "dataset-validation"))
+
+import validate_dataset as vd  # noqa: E402
+
+warnings.simplefilter("ignore")  # openpyxl emits noise about unsupported features
+
+_TESTS: list = []
+
+
+def test(fn):
+    _TESTS.append(fn)
+    return fn
+
+
+def _expect(cond: bool, msg: str) -> None:
+    if not cond:
+        raise AssertionError(msg)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _run_xml(xml: str, forms=None):
+    """Write XML to a temp file, run the validator, return the Report."""
+    with tempfile.NamedTemporaryFile("w", suffix=".xml", delete=False) as fh:
+        fh.write(xml)
+        path = fh.name
+    return vd.run(path, forms or [])
+
+
+def _codes(report, severity=None) -> set:
+    return {f.rule for f in report.findings if severity is None or f.severity == severity}
+
+
+def _wrap(definition_body: str, instance: str = "<instance><version>1</version></instance>") -> str:
+    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+            f"<dataset><definition>{definition_body}</definition>{instance}</dataset>")
+
+
+VALID_DATA = _wrap(
+    "<id>lookup</id><title>Lookup</title><datasetType>SERVER</datasetType>"
+    "<fieldNames>key,value</fieldNames><formLinks/><dataLinks/>"
+)
+
+
+def _make_form(rows, path=None) -> str:
+    """rows: list of (type, name). Build a minimal XLSForm with a survey sheet."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "survey"
+    ws.append(["type", "name", "label"])
+    for t, n in rows:
+        ws.append([t, n, n])
+    wb.create_sheet("choices")
+    wb.create_sheet("settings")
+    if path is None:
+        fh = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        path = fh.name
+        fh.close()
+    wb.save(path)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# Structure / required / order
+# ---------------------------------------------------------------------------
+
+@test
+def test_valid_data_dataset_has_no_errors():
+    r = _run_xml(VALID_DATA)
+    _expect(not r.has_errors, f"valid dataset produced errors: {_codes(r, vd.ERROR)}")
+
+
+@test
+def test_missing_required_children():
+    r = _run_xml(_wrap("<title>No id or type</title>"))
+    codes = _codes(r, vd.ERROR)
+    _expect("definition-required" in codes, codes)
+
+
+@test
+def test_definition_order_enforced():
+    # discriminator before idFormatOptions is out of order.
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<discriminator>DATA</discriminator><idFormatOptions><numberOfDigits>6</numberOfDigits></idFormatOptions>"
+    ))
+    _expect("definition-order" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_unknown_element_rejected():
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><bogus>1</bogus>"
+    ))
+    _expect("definition-order" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_doctype_rejected():
+    xml = ('<?xml version="1.0"?>\n<!DOCTYPE dataset [<!ENTITY x "y">]>\n'
+           "<dataset><definition><id>x</id><title>X</title>"
+           "<datasetType>SERVER</datasetType></definition></dataset>")
+    r = _run_xml(xml)
+    _expect("xml-parse" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_doctype_after_long_comment_rejected():
+    # A long leading comment must not push a DOCTYPE past the guard (billion-laughs).
+    xml = ('<?xml version="1.0"?>\n<!-- ' + ("A" * 9000) + " -->\n"
+           '<!DOCTYPE lolz [<!ENTITY lol "lol">]>\n'
+           "<dataset><definition><id>x</id><title>X</title>"
+           "<datasetType>SERVER</datasetType></definition></dataset>")
+    r = _run_xml(xml)
+    _expect("xml-parse" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_doctype_comment_containing_dataset_tag_rejected():
+    # A comment containing '<dataset' must not fool the prolog scanner into
+    # treating a real DOCTYPE (which follows the comment but precedes the root)
+    # as post-root content. Without comment-stripping, find(b'<dataset') hits the
+    # string inside the comment and the DOCTYPE evades the guard.
+    xml = ('<?xml version="1.0"?>\n'
+           '<!-- <dataset this is a comment -->\n'
+           '<!DOCTYPE lolz [<!ENTITY lol "INJECTED">]>\n'
+           "<dataset><definition><id>x</id><title>X</title>"
+           "<datasetType>SERVER</datasetType></definition></dataset>")
+    r = _run_xml(xml)
+    _expect("xml-parse" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_doctype_processing_instruction_containing_dataset_tag_rejected():
+    # A processing instruction containing '<dataset' must not fool the prolog
+    # scanner into treating a DOCTYPE that follows the PI as post-root content.
+    # Without PI-stripping, find(b'<dataset') hits the string inside the PI and
+    # the DOCTYPE evades the guard, allowing entity expansion to proceed.
+    xml = ('<?xml version="1.0"?>\n'
+           '<?pi <dataset this is a pi ?>\n'
+           '<!DOCTYPE lolz [<!ENTITY lol "INJECTED">]>\n'
+           "<dataset><definition><id>x</id><title>X</title>"
+           "<datasetType>SERVER</datasetType></definition></dataset>")
+    r = _run_xml(xml)
+    _expect("xml-parse" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+# ---------------------------------------------------------------------------
+# Identity / type / discriminator
+# ---------------------------------------------------------------------------
+
+@test
+def test_id_bad_chars():
+    r = _run_xml(_wrap("<id>has space</id><title>X</title><datasetType>SERVER</datasetType>"))
+    _expect("id-chars" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_id_qc_suffix():
+    r = _run_xml(_wrap("<id>data_qc</id><title>X</title><datasetType>SERVER</datasetType>"))
+    _expect("id-qc-suffix" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_client_and_report_rejected():
+    r1 = _run_xml(_wrap("<id>x</id><title>X</title><datasetType>CLIENT</datasetType>"))
+    _expect("type-client" in _codes(r1, vd.ERROR), _codes(r1, vd.ERROR))
+    r2 = _run_xml(_wrap("<id>x</id><title>X</title><datasetType>REPORT</datasetType>"))
+    _expect("type-report" in _codes(r2, vd.ERROR), _codes(r2, vd.ERROR))
+
+
+@test
+def test_bad_discriminator():
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<discriminator>WRONG</discriminator>"))
+    _expect("discriminator-enum" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+# ---------------------------------------------------------------------------
+# idFormatOptions (enumerators)
+# ---------------------------------------------------------------------------
+
+@test
+def test_enumerator_missing_id_format_is_warning():
+    # The server defaults idFormatOptions, so its absence is a warning, not an error.
+    r = _run_xml(_wrap(
+        "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
+        "<discriminator>ENUMERATORS</discriminator>"
+        "<uniqueRecordField>id</uniqueRecordField>"))
+    _expect(not r.has_errors, f"missing idFormatOptions should not be an error: {_codes(r, vd.ERROR)}")
+    _expect("idformat-default-enum" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_idformat_presence_infers_enumerator_and_validates():
+    # <idFormatOptions> with discriminator DATA: the server treats this as an
+    # ENUMERATORS dataset, so the bad prefix is validated and a discriminator
+    # inference warning is raised.
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
+        "<idFormatOptions><prefix>BAD-</prefix><numberOfDigits>6</numberOfDigits></idFormatOptions>"
+        "<discriminator>DATA</discriminator>"))
+    _expect("idformat-prefix" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+    _expect("discriminator-inferred" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_enumerator_prefix_and_digits_rules():
+    r = _run_xml(_wrap(
+        "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
+        "<idFormatOptions><prefix>ENU-</prefix><numberOfDigits>2</numberOfDigits></idFormatOptions>"
+        "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>id</uniqueRecordField>"))
+    codes = _codes(r, vd.ERROR)
+    _expect("idformat-prefix" in codes, codes)
+    _expect("idformat-digits-range" in codes, codes)
+
+
+@test
+def test_enumerator_valid_clean():
+    r = _run_xml(_wrap(
+        "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
+        "<idFormatOptions><prefix>ENU</prefix><numberOfDigits>6</numberOfDigits></idFormatOptions>"
+        "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>id</uniqueRecordField>"))
+    _expect(not r.has_errors, _codes(r, vd.ERROR))
+
+
+@test
+def test_enumerator_missing_users_is_warning_not_error():
+    r = _run_xml(_wrap(
+        "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name</fieldNames><formLinks/><dataLinks/>"
+        "<idFormatOptions><numberOfDigits>6</numberOfDigits></idFormatOptions>"
+        "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>id</uniqueRecordField>"))
+    _expect(not r.has_errors, f"missing users should not be an error: {_codes(r, vd.ERROR)}")
+    _expect("enum-users-column" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_enumerator_missing_required_id_is_warning():
+    # The upload is not rejected for a missing id column; it degrades at data
+    # insert time, so this is a warning under server-truth tiering.
+    r = _run_xml(_wrap(
+        "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>name,users</fieldNames><formLinks/><dataLinks/>"
+        "<idFormatOptions><numberOfDigits>6</numberOfDigits></idFormatOptions>"
+        "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>id</uniqueRecordField>"))
+    _expect(not r.has_errors, f"missing id column should not be an error: {_codes(r, vd.ERROR)}")
+    _expect("enum-required-column" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_enumerator_unicode_prefix_accepted():
+    # The server uses Apache isAlphanumeric (Unicode), so an accented prefix is valid.
+    r = _run_xml(_wrap(
+        "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
+        "<idFormatOptions><prefix>Énu</prefix><numberOfDigits>6</numberOfDigits></idFormatOptions>"
+        "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>id</uniqueRecordField>"))
+    _expect("idformat-prefix" not in _codes(r, vd.ERROR),
+            f"unicode prefix must be accepted: {_codes(r, vd.ERROR)}")
+
+
+@test
+def test_uppercase_id_accepted():
+    # The server lowercases the id before validating its character set.
+    r = _run_xml(_wrap("<id>My_Lookup</id><title>X</title><datasetType>SERVER</datasetType>"))
+    _expect("id-chars" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+# ---------------------------------------------------------------------------
+# caseManagementOptions
+# ---------------------------------------------------------------------------
+
+@test
+def test_cases_table_requires_id_column():
+    r = _run_xml(_wrap(
+        "<id>cases</id><title>C</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,label,formids,users,roles,sortby,enumerators</fieldNames>"
+        "<caseManagementOptions><displayMode>table</displayMode>"
+        "<showFinalizedSentWhenTree>true</showFinalizedSentWhenTree>"
+        "<showColumnsWhenTable><columnNames>label</columnNames></showColumnsWhenTable>"
+        "</caseManagementOptions><discriminator>CASES</discriminator>"
+        "<uniqueRecordField>id</uniqueRecordField>"))
+    _expect("casemgmt-table-id" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_cases_bad_display_mode():
+    r = _run_xml(_wrap(
+        "<id>cases</id><title>C</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,label,formids,users,roles,sortby,enumerators</fieldNames>"
+        "<caseManagementOptions><displayMode>grid</displayMode>"
+        "<showFinalizedSentWhenTree>true</showFinalizedSentWhenTree>"
+        "<showColumnsWhenTable/></caseManagementOptions>"
+        "<discriminator>CASES</discriminator><uniqueRecordField>id</uniqueRecordField>"))
+    _expect("casemgmt-displaymode-enum" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_cases_other_user_code_alnum():
+    r = _run_xml(_wrap(
+        "<id>cases</id><title>C</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,label,formids,users,roles,sortby,enumerators</fieldNames>"
+        "<caseManagementOptions><displayMode>tree</displayMode>"
+        "<showFinalizedSentWhenTree>true</showFinalizedSentWhenTree>"
+        "<showColumnsWhenTable/><otherUserCode>OTHER-1</otherUserCode></caseManagementOptions>"
+        "<discriminator>CASES</discriminator><uniqueRecordField>id</uniqueRecordField>"))
+    _expect("casemgmt-otherusercode" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_cases_missing_required_column_is_warning():
+    # Missing formids is accepted on upload; the case list fails to render at
+    # runtime, so this is a warning, not an upload-blocking error.
+    r = _run_xml(_wrap(
+        "<id>cases</id><title>C</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,label</fieldNames><formLinks/><dataLinks/>"
+        "<caseManagementOptions><displayMode>tree</displayMode>"
+        "<showFinalizedSentWhenTree>true</showFinalizedSentWhenTree>"
+        "<showColumnsWhenTable/></caseManagementOptions>"
+        "<discriminator>CASES</discriminator><uniqueRecordField>id</uniqueRecordField>"))
+    _expect(not r.has_errors, f"missing cases column should not be an error: {_codes(r, vd.ERROR)}")
+    _expect("cases-required-column" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+# ---------------------------------------------------------------------------
+# fieldNames rules
+# ---------------------------------------------------------------------------
+
+@test
+def test_reserved_rowid_is_warning():
+    # The import path does not reject 'rowId', so it is a warning, not an error.
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>key,rowId</fieldNames>"))
+    _expect("field-reserved" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_db_column_name_collision_is_error():
+    # 'Region' and 'region' both safen to the same DB column name.
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,Region,region</fieldNames>"))
+    _expect("field-column-conflict" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_xsd_boolean_lexical_rejected():
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>key</fieldNames><formLinks/><dataLinks/>"
+        "<uniqueRecordField>key</uniqueRecordField>"
+        "<allowOfflineUpdates>TRUE</allowOfflineUpdates>"))
+    _expect("xsd-boolean-lexical" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_offline_updates_not_required_for_cases_dataset():
+    # The server forces urf='id' for cases datasets, so offline updates without an
+    # explicit uniqueRecordField is not an error.
+    r = _run_xml(_wrap(
+        "<id>cases</id><title>C</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,label,formids,users,roles,sortby,enumerators</fieldNames>"
+        "<formLinks/><dataLinks/>"
+        "<caseManagementOptions><displayMode>tree</displayMode>"
+        "<showFinalizedSentWhenTree>true</showFinalizedSentWhenTree>"
+        "<showColumnsWhenTable/></caseManagementOptions>"
+        "<discriminator>CASES</discriminator>"
+        "<allowOfflineUpdates>true</allowOfflineUpdates>"))
+    _expect("offline-requires-urf" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_empty_typed_elements_rejected():
+    # Present-but-empty xs:boolean / xs:integer elements are invalid per the schema.
+    r = _run_xml(_wrap(
+        "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
+        "<idFormatOptions><numberOfDigits/></idFormatOptions>"
+        "<discriminator>ENUMERATORS</discriminator><allowOfflineUpdates/>"))
+    codes = _codes(r, vd.ERROR)
+    _expect("xsd-boolean-lexical" in codes, codes)        # empty <allowOfflineUpdates/>
+    _expect("idformat-digits-number" in codes, codes)     # empty <numberOfDigits/>
+
+
+@test
+def test_empty_datalinkformat_rejected():
+    fm = '[{"formField":"a","datasetField":"key"}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat/>"
+        f"<linkObjectId>f</linkObjectId><fieldMap>{fm}</fieldMap></dataLink></dataLinks>")
+    _expect("datalink-format-integer" in _codes(_run_xml(xml), vd.ERROR), "empty dataLinkFormat not flagged")
+
+
+@test
+def test_option_block_unknown_and_duplicate_children_rejected():
+    r = _run_xml(_wrap(
+        "<id>enum</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/><dataLinks/>"
+        "<idFormatOptions><numberOfDigits>6</numberOfDigits><numberOfDigits>7</numberOfDigits>"
+        "<bogus>x</bogus></idFormatOptions><discriminator>ENUMERATORS</discriminator>"))
+    codes = _codes(r, vd.ERROR)
+    _expect("block-unexpected-child" in codes, codes)
+    _expect("block-duplicate-child" in codes, codes)
+
+
+@test
+def test_non_string_field_map_value_is_shape_error_not_crash():
+    fm = '[{"formField":"a","datasetField":123}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>k</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f</linkObjectId>"
+        f"<fieldMap>{fm}</fieldMap></dataLink></dataLinks>")
+    r = _run_xml(xml)  # must not raise
+    _expect("fieldmap-shape" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_missing_formlinks_datalinks_is_error():
+    # Omitting <formLinks>/<dataLinks> makes the import fail with a server error.
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"))
+    _expect("definition-formlinks-required" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_field_too_long():
+    long_name = "f" * 61
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        f"<fieldNames>key,{long_name}</fieldNames>"))
+    _expect("field-too-long" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+# ---------------------------------------------------------------------------
+# dataLink / fieldMap rules
+# ---------------------------------------------------------------------------
+
+def _with_data_link(field_map: str, joining: str = "", fmt: str = "0",
+                    unique_record: str = "", extra_fields: str = "key,value") -> str:
+    urf = f"<uniqueRecordField>{unique_record}</uniqueRecordField>" if unique_record else ""
+    join = f"<joiningField>{joining}</joiningField>" if joining else ""
+    return _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        f"<fieldNames>{extra_fields}</fieldNames>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType>"
+        f"<dataLinkFormat>{fmt}</dataLinkFormat><linkObjectId>f1</linkObjectId>"
+        f"<fieldMap>{field_map}</fieldMap>{join}</dataLink></dataLinks>" + urf)
+
+
+@test
+def test_field_map_invalid_json():
+    r = _run_xml(_with_data_link("{not valid json"))
+    _expect("fieldmap-json" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_field_map_object_form_accepted():
+    r = _run_xml(_with_data_link('{"a":"key","b":"value"}'))
+    _expect("fieldmap-json" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_duplicate_form_field_mapping():
+    # SCTO-15074: same form field mapped twice (array form allows it).
+    fm = ('[{"formField":"a","datasetField":"key"},'
+          '{"formField":"a","datasetField":"value"}]')
+    r = _run_xml(_with_data_link(fm))
+    _expect("fieldmap-duplicate" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_duplicate_dataset_field_mapping():
+    fm = ('[{"formField":"a","datasetField":"key"},'
+          '{"formField":"b","datasetField":"key"}]')
+    r = _run_xml(_with_data_link(fm))
+    _expect("fieldmap-duplicate" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_joining_field_must_be_in_map():
+    # SCTO-15073.
+    fm = '[{"formField":"a","datasetField":"key"}]'
+    r = _run_xml(_with_data_link(fm, joining="caseid"))
+    _expect("joining-field-in-map" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_joining_field_suffix_mismatch():
+    fm = '[{"formField":"caseid","datasetField":"key"}]'
+    r = _run_xml(_with_data_link(fm, joining="caseid*", fmt="1"))
+    _expect("joining-field-suffix" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_joining_field_replace_required():
+    fm = ('[{"formField":"caseid","datasetField":"key","updateLogicAction":"ADD_TO_NUMERIC_VALUE"}]')
+    r = _run_xml(_with_data_link(fm, joining="caseid"))
+    _expect("joining-field-replace" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_bad_update_logic_action():
+    fm = '[{"formField":"a","datasetField":"key","updateLogicAction":"BOGUS"}]'
+    r = _run_xml(_with_data_link(fm))
+    _expect("fieldmap-action-enum" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_datalink_order_enforced():
+    # joiningField before fieldMap is out of order.
+    body = (
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>key</fieldNames>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f1</linkObjectId>"
+        '<joiningField>a</joiningField><fieldMap>{"a":"key"}</fieldMap>'
+        "</dataLink></dataLinks>")
+    r = _run_xml(_wrap(body))
+    _expect("datalink-order" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_datalink_publish_partial_data_accepted():
+    # A definition the server itself exports ends the dataLink sequence with
+    # <publishPartialData> after <isAutoConfigured>; re-uploading it must not be
+    # flagged as an ordering error.
+    body = (
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>key</fieldNames>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f1</linkObjectId>"
+        '<fieldMap>{"a":"key"}</fieldMap>'
+        "<isAutoConfigured>false</isAutoConfigured>"
+        "<publishPartialData>false</publishPartialData>"
+        "</dataLink></dataLinks>")
+    r = _run_xml(_wrap(body))
+    _expect("datalink-order" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_datalink_publish_partial_data_bad_boolean_rejected():
+    # publishPartialData is an xs:boolean; a non-boolean value is rejected at XSD
+    # validation, the same as the other boolean-typed elements.
+    body = (
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>key</fieldNames>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f1</linkObjectId>"
+        "<publishPartialData>yes</publishPartialData>"
+        "</dataLink></dataLinks>")
+    r = _run_xml(_wrap(body))
+    _expect("xsd-boolean-lexical" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+# ---------------------------------------------------------------------------
+# Long-format / unique-record-field scoping (no false positives)
+# ---------------------------------------------------------------------------
+
+@test
+def test_long_format_unique_record_field_must_be_a_column():
+    # The server rejects a new dataset whose uniqueRecordField is not in
+    # <fieldNames>, with no long-format carve-out. For long format the unique
+    # record field is the dataset COLUMN the joining field maps into.
+    fm = ('[{"formField":"plot_id*","datasetField":"plot_id_key*","updateLogicAction":"REPLACE"},'
+          '{"formField":"area_ha*","datasetField":"area_ha*","updateLogicAction":"REPLACE"}]')
+    base = ("<id>plots</id><title>P</title><datasetType>SERVER</datasetType>"
+            "<fieldNames>plot_id_key,area_ha</fieldNames>"
+            "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+            "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
+            f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap>"
+            "<joiningField>plot_id*</joiningField></dataLink></dataLinks>"
+            "<discriminator>DATA</discriminator>")
+    # Bare form field 'plot_id' (not a column) is rejected.
+    r_bad = _run_xml(_wrap(base + "<uniqueRecordField>plot_id</uniqueRecordField>"))
+    _expect("urf-not-a-column" in _codes(r_bad, vd.ERROR), _codes(r_bad, vd.ERROR))
+    # The dataset column 'plot_id_key' is accepted.
+    r_ok = _run_xml(_wrap(base + "<uniqueRecordField>plot_id_key</uniqueRecordField>"))
+    _expect("urf-not-a-column" not in _codes(r_ok, vd.ERROR), _codes(r_ok, vd.ERROR))
+
+
+# ---------------------------------------------------------------------------
+# Form extraction + cross-reference
+# ---------------------------------------------------------------------------
+
+@test
+def test_form_extraction_types_and_repeat():
+    form = _make_form([
+        ("text", "farmer_id"),
+        ("note", "intro"),
+        ("begin group", "g1"),
+        ("integer", "age"),
+        ("end group", "g1"),
+        ("begin repeat", "plots"),
+        ("text", "plot_id"),
+        ("decimal", "area_ha"),
+        ("select_one crops", "crop_type"),
+        ("end repeat", "plots"),
+        ("calculate", "computed"),
+    ])
+    fields = vd.extract_form_fields(form)
+    by_name = {f.name: f for f in fields}
+    _expect(by_name["intro"].type == "note", "notes are retained but typed 'note'")
+    _expect("g1" not in by_name, "group containers are not fields")
+    _expect("plots" not in by_name, "repeat containers are not fields")
+    _expect(by_name["age"].repeated is False, "field in plain group is not repeated")
+    _expect(by_name["plot_id"].repeated is True, "field in repeat is repeated")
+    _expect(by_name["area_ha"].repeated is True, "field in repeat is repeated")
+    _expect(by_name["crop_type"].type == "select_one", by_name["crop_type"].type)
+    _expect(by_name["computed"].type == "text", "calculate maps to text")
+    _expect(by_name["SubmissionDate"].metadata is True, "metadata appended")
+    _expect(by_name["KEY"].metadata is True, "KEY metadata appended")
+
+
+@test
+def test_cross_reference_missing_field():
+    form = _make_form([("text", "real_field")])
+    fm = '[{"formField":"ghost","datasetField":"key"}]'
+    xml = _with_data_link(fm)
+    r = _run_xml(xml, forms=[form])
+    _expect("fieldmap-form-field-missing" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_cross_reference_repeat_suffix_missing():
+    form = _make_form([
+        ("begin repeat", "rep"), ("text", "in_repeat"), ("end repeat", "rep"),
+    ])
+    # in_repeat is repeated in the form but mapped without the '*' suffix.
+    fm = '[{"formField":"in_repeat","datasetField":"key"}]'
+    xml = _with_data_link(fm)
+    r = _run_xml(xml, forms=[form])
+    _expect("fieldmap-repeat-suffix-missing" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_cross_reference_long_format_joining_not_in_repeat():
+    form = _make_form([
+        ("text", "top_level"),
+        ("begin repeat", "rep"), ("text", "inside"), ("end repeat", "rep"),
+    ])
+    # joining field is top_level (not in a repeat) but format is long.
+    fm = '[{"formField":"top_level","datasetField":"key"}]'
+    xml = _with_data_link(fm, joining="top_level", fmt="1")
+    r = _run_xml(xml, forms=[form])
+    _expect("joining-field-not-repeat" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_offline_updates_requires_unique_record_field():
+    r = _run_xml(_wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>key,value</fieldNames>"
+        "<allowOfflineUpdates>true</allowOfflineUpdates>"))
+    _expect("offline-requires-urf" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_conditional_metadata_field_is_warning_not_error():
+    # formdef_id is not in the incoming form feed nor in the survey sheet, so
+    # mapping it is a warning (availability unknown), not a hard missing-field error.
+    form = _make_form([("text", "real_field")])
+    fm = '[{"formField":"formdef_id","datasetField":"key"}]'
+    r = _run_xml(_with_data_link(fm), forms=[form])
+    _expect("fieldmap-form-field-missing" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+    _expect("fieldmap-conditional-meta" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_empty_incoming_form_map_is_error():
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>k</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f</linkObjectId></dataLink></dataLinks>")
+    r = _run_xml(xml)
+    _expect("fieldmap-empty" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_outgoing_link_skips_incoming_publishing_rules():
+    # A console-only outgoing/cloud link must not get the incoming field-map rules.
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>k</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>SPREADSHEET</dataLinkClass>"
+        "<dataLinkType>OUTGOING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
+        "<linkObjectId>sheet1</linkObjectId></dataLink></dataLinks>")
+    r = _run_xml(xml)
+    _expect("long-format-requires-joining" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+    _expect("outgoing-link-console-only" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_id_qc_not_flagged_for_client():
+    # The server rejects CLIENT before reaching the _qc check, so id-qc must not
+    # pile on; SERVER with a _qc id still fires it.
+    r = _run_xml(_wrap("<id>data_qc</id><title>X</title><datasetType>CLIENT</datasetType>"))
+    _expect("id-qc-suffix" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+    _expect("type-client" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_duplicate_definition_child_rejected():
+    xml = ('<?xml version="1.0"?><dataset><definition><id>a</id><id>b</id><title>X</title>'
+           "<datasetType>SERVER</datasetType><formLinks/><dataLinks/></definition></dataset>")
+    _expect("definition-order" in _codes(_run_xml(xml), vd.ERROR), "duplicate id not flagged")
+
+
+@test
+def test_id_qc_not_flagged_when_type_missing():
+    # The server checks the _qc suffix only after the type validates.
+    r = _run_xml(_wrap("<id>data_qc</id><title>X</title>"))
+    _expect("id-qc-suffix" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+    _expect("type-missing" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_long_format_requires_joining_when_field_map_absent():
+    # A long-format link with no <fieldMap> element must still raise the error.
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
+        "<linkObjectId>f</linkObjectId></dataLink></dataLinks>")
+    r = _run_xml(xml)
+    _expect("long-format-requires-joining" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_forced_id_urf_checks_fire_without_explicit_urf():
+    # A cases dataset that omits <uniqueRecordField> still has urf forced to 'id',
+    # so a joining field mapping to the wrong column must be flagged.
+    fm = '[{"formField":"caseid","datasetField":"label"}]'
+    xml = _wrap(
+        "<id>cx</id><title>C</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,label,formids</fieldNames><formLinks/>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f</linkObjectId>"
+        f"<fieldMap>{fm}</fieldMap><joiningField>caseid</joiningField></dataLink></dataLinks>"
+        "<caseManagementOptions><displayMode>tree</displayMode>"
+        "<showFinalizedSentWhenTree>true</showFinalizedSentWhenTree>"
+        "<showColumnsWhenTable/></caseManagementOptions><discriminator>CASES</discriminator>")
+    codes = _codes(_run_xml(xml), vd.ERROR)
+    _expect("urf-not-mapped" in codes, codes)
+    _expect("joining-merges-on-urf" in codes, codes)
+
+
+@test
+def test_forced_id_urf_ignores_stray_unique_record_field():
+    # An enumerator dataset with a stray <uniqueRecordField> whose joining maps
+    # correctly to 'id' (what the server forces) must not be flagged.
+    fm = '[{"formField":"eid","datasetField":"id"},{"formField":"nm","datasetField":"name"}]'
+    xml = _wrap(
+        "<id>ex</id><title>E</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id,name,users</fieldNames><formLinks/>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><linkObjectId>f</linkObjectId>"
+        f"<fieldMap>{fm}</fieldMap><joiningField>eid</joiningField></dataLink></dataLinks>"
+        "<idFormatOptions><numberOfDigits>6</numberOfDigits></idFormatOptions>"
+        "<discriminator>ENUMERATORS</discriminator><uniqueRecordField>custom</uniqueRecordField>")
+    codes = _codes(_run_xml(xml), vd.ERROR)
+    _expect("joining-merges-on-urf" not in codes, codes)
+    _expect("urf-not-mapped" not in codes, codes)
+
+
+@test
+def test_long_format_requires_joining_field():
+    fm = '[{"formField":"a*","datasetField":"key*"}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
+        f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap></dataLink></dataLinks>")
+    r = _run_xml(xml)
+    _expect("long-format-requires-joining" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_long_format_sibling_repeat_field_rejected():
+    # A field from a different (sibling) repeat than the joining field does not qualify.
+    form = _make_form([
+        ("begin repeat", "repA"), ("text", "a_id"), ("text", "a_val"), ("end repeat", "repA"),
+        ("begin repeat", "repB"), ("text", "b_val"), ("end repeat", "repB"),
+    ])
+    fm = ('[{"formField":"a_id*","datasetField":"id*","updateLogicAction":"REPLACE"},'
+          '{"formField":"b_val*","datasetField":"b_val*","updateLogicAction":"REPLACE"}]')
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>id,b_val</fieldNames>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
+        f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap>"
+        "<joiningField>a_id*</joiningField></dataLink></dataLinks>")
+    r = _run_xml(xml, forms=[form])
+    _expect("long-format-field-scope" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_link_object_id_must_match_form_id():
+    # The form declares form_id 'real_form_id'; linkObjectId uses the file stem.
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "survey"
+    ws.append(["type", "name", "label"])
+    ws.append(["text", "f1", "f1"])
+    ws.append(["text", "key_src", "key_src"])
+    st = wb.create_sheet("settings")
+    st.append(["form_title", "form_id"])
+    st.append(["My Form", "real_form_id"])
+    wb.create_sheet("choices")
+    import tempfile as _tf
+    fh = _tf.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    path = fh.name
+    fh.close()
+    wb.save(path)
+    fm = '[{"formField":"key_src","datasetField":"key"}]'
+    xml = _with_data_link(fm)  # linkObjectId is 'f1'
+    r = _run_xml(xml, forms=[path])
+    _expect("linkobject-formid-mismatch" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_incoming_form_link_flags_streaming_and_forms_deployed():
+    fm = '[{"formField":"a","datasetField":"key"}]'
+    r = _run_xml(_with_data_link(fm))
+    codes = _codes(r, vd.CANNOT_VERIFY)
+    _expect("streaming-license" in codes, codes)
+    _expect("forms-deployed" in codes, codes)
+
+
+@test
+def test_forms_deployed_is_deduplicated():
+    # Multiple links to multiple forms collapse to one consolidated reminder.
+    fm = '[{"formField":"a","datasetField":"key"}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+        "<formLinks/><dataLinks>"
+        f"<dataLink><dataLinkClass>FORM</dataLinkClass><dataLinkType>INCOMING</dataLinkType>"
+        f"<linkObjectId>form_a</linkObjectId><fieldMap>{fm}</fieldMap></dataLink>"
+        f"<dataLink><dataLinkClass>FORM</dataLinkClass><dataLinkType>INCOMING</dataLinkType>"
+        f"<linkObjectId>form_b</linkObjectId><fieldMap>{fm}</fieldMap></dataLink>"
+        "</dataLinks>")
+    r = _run_xml(xml)
+    deployed = [f for f in r.findings if f.rule == "forms-deployed"]
+    _expect(len(deployed) == 1, f"expected one consolidated forms-deployed item, got {len(deployed)}")
+    _expect("form_a" in deployed[0].message and "form_b" in deployed[0].message, deployed[0].message)
+
+
+@test
+def test_id_collision_surfaced_as_cannot_verify():
+    r = _run_xml(VALID_DATA)
+    _expect("id-collision" in _codes(r, vd.CANNOT_VERIFY), _codes(r, vd.CANNOT_VERIFY))
+
+
+@test
+def test_unique_record_field_must_be_mapped_is_error():
+    # Console-parity: an incoming link into a dataset with a uniqueRecordField must
+    # map into it.
+    fm = '[{"formField":"a","datasetField":"other"}]'
+    xml = _with_data_link(fm, unique_record="key", extra_fields="key,other")
+    r = _run_xml(xml)
+    _expect("urf-not-mapped" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_joining_must_merge_on_unique_record_field_is_error():
+    fm = '[{"formField":"caseid","datasetField":"other"},{"formField":"x","datasetField":"key"}]'
+    xml = _with_data_link(fm, joining="caseid", unique_record="key", extra_fields="key,other")
+    r = _run_xml(xml)
+    _expect("joining-merges-on-urf" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_outgoing_link_warned():
+    fm = '[{"formField":"a","datasetField":"key"}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+        "<formLinks/><dataLinks><dataLink><dataLinkClass>SPREADSHEET</dataLinkClass>"
+        "<dataLinkType>OUTGOING</dataLinkType><linkObjectId>sheet1</linkObjectId>"
+        f"<fieldMap>{fm}</fieldMap></dataLink></dataLinks>")
+    r = _run_xml(xml)
+    _expect("outgoing-link-console-only" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_mapped_note_is_warning():
+    form = _make_form([("note", "instructions"), ("text", "real_field")])
+    fm = '[{"formField":"instructions","datasetField":"key"}]'
+    r = _run_xml(_with_data_link(fm), forms=[form])
+    _expect("fieldmap-note" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+    _expect("fieldmap-form-field-missing" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_unexpected_root_element_rejected():
+    xml = ('<?xml version="1.0"?>\n<dataset><definition><id>x</id><title>X</title>'
+           "<datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+           "<formLinks/><dataLinks/></definition><bogus>1</bogus></dataset>")
+    r = _run_xml(xml)
+    _expect("root-unexpected-element" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_instance_requires_version():
+    xml = ('<?xml version="1.0"?>\n<dataset><definition><id>x</id><title>X</title>'
+           "<datasetType>SERVER</datasetType><fieldNames>key</fieldNames>"
+           "<formLinks/><dataLinks/></definition><instance></instance></dataset>")
+    r = _run_xml(xml)
+    _expect("instance-version-required" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_cross_reference_clean_when_consistent():
+    form = _make_form([
+        ("text", "farmer_id"),
+        ("begin repeat", "plots"), ("text", "plot_id"), ("decimal", "area_ha"),
+        ("end repeat", "plots"),
+    ])
+    fm = ('[{"formField":"plot_id*","datasetField":"plot_id_key*","updateLogicAction":"REPLACE"},'
+          '{"formField":"area_ha*","datasetField":"area_ha*","updateLogicAction":"REPLACE"}]')
+    xml = _wrap(
+        "<id>plots</id><title>P</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>plot_id_key,area_ha</fieldNames><formLinks/>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
+        f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap>"
+        "<joiningField>plot_id*</joiningField></dataLink></dataLinks>"
+        "<discriminator>DATA</discriminator><uniqueRecordField>plot_id_key</uniqueRecordField>")
+    r = _run_xml(xml, forms=[form])
+    _expect(not r.has_errors, f"consistent cross-reference should be clean: {_codes(r, vd.ERROR)}")
+
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    failures = 0
+    for fn in _TESTS:
+        try:
+            fn()
+            print(f"  ok  {fn.__name__}")
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
+            print(f"FAIL  {fn.__name__}: {exc}")
+    print(f"\n{len(_TESTS) - failures}/{len(_TESTS)} passed")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
