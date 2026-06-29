@@ -47,7 +47,7 @@ Forms referenced in `<formLinks>` or `<dataLinks>` must be deployed before uploa
         <joiningField>unique_id</joiningField>       <!-- Optional: unique ID for upserts -->
         <relevanceField>filter</relevanceField>      <!-- Optional: publish only when =1 -->
         <isAutoConfigured>false</isAutoConfigured>   <!-- Optional: default false -->
-        <publishPartialData>false</publishPartialData> <!-- Optional: default false -->
+        <publishPartialData>false</publishPartialData> <!-- Do NOT include by default (most servers reject it on import). Add it only to enable real-time dataset publishing on a server that supports the feature. -->
       </dataLink>
     </dataLinks>
 
@@ -280,4 +280,4 @@ These are real behaviors the server applies that are easy to miss when authoring
 - **`allowOfflineUpdates` needs a unique record field.** Enabling offline updates requires a unique record field (forced to `id` for cases/enumerator datasets), and a subscription that supports offline publishing.
 - **Outgoing and cloud links are console-only.** `OUTGOING` links and the `SPREADSHEET`/`FUSION_TABLE` classes are configured in the console, not created by importing a dataset definition. `WEBHOOK`/`ZAPIER` are not in the import schema at all. Author only incoming `FORM` links in definitions.
 - **`isAutoConfigured` is server-generated.** Leave it `false` (or omit it). The auto-configured enumerator-link constraints are applied by the console, not the import path.
-- **`publishPartialData` is an optional boolean (default `false`).** The server writes it into definitions it exports and accepts it on import, so a downloaded definition that contains `<publishPartialData>` re-uploads cleanly. It is managed through the console; when authoring by hand, leave it `false` or omit it. It must appear last in the `<dataLink>` sequence, after `isAutoConfigured`.
+- **`publishPartialData` controls real-time (partial) dataset publishing.** Default: OMIT it. Most servers do not support the feature and reject the element on import (`cvc-complex-type.2.4.d`); omitting it equals `false`, so never add it to an ordinary definition. The one exception: when the user explicitly asks to enable real-time or partial publishing AND confirms their server supports it, set `<publishPartialData>true</publishPartialData>` (last in `<dataLink>`, after `isAutoConfigured`). If they ask but have not confirmed server support, do not add it; say it requires a supporting server and ask. In a downloaded definition that already contains it, remove it before re-uploading unless the user confirms the target server supports the feature; a server can export the element but still reject it on import (`cvc-complex-type.2.4.d`), so do not assume a downloaded file re-uploads as-is.
