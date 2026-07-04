@@ -13,7 +13,7 @@ SurveyCTO expressions are XPath-derived/XLSForm-style expressions evaluated agai
 
 | Expression item | Meaning | Example | Docs |
 | --- | --- | --- | --- |
-| `${fieldname}` | The current value stored in another form field. In labels, calculations, relevance, constraints, and most expressions, this returns the value exactly as it will appear in submitted data. | `${age}` | [Referencing current values](https://docs.surveycto.com/02-designing-forms/01-core-concepts/09.expressions.html#referencing-current-values) |
+| `${fieldname}` | The current value stored in another form field. In labels, calculations, relevance, constraints, and most expressions, this returns the value exactly as it will appear in submitted data. `${...}` resolves a bare field (node) name only; it never evaluates a function or expression inside the braces. `${index()}`, `${today()}`, or `${a + b}` in a label renders nothing. To display a computed value, put the function or expression in a `calculate` and reference that field. | `${age}` | [Referencing current values](https://docs.surveycto.com/02-designing-forms/01-core-concepts/09.expressions.html#referencing-current-values) |
 | `.` | In a `constraint`, the user's proposed entry or selection for the current field. SurveyCTO documents `.` for constraints; prefer explicit `${field}` references elsewhere unless a documented example uses `.`. | `. < 130` | [Constraints](https://docs.surveycto.com/02-designing-forms/01-core-concepts/07.constraints.html) |
 | Choice-sheet column names in `choice_filter` | A bare name such as `filter` refers to the value in that column for the candidate choice row being tested. `${field}` still refers to a form field. | `filter=${region}`; `selected(${crops}, filter)` | [Cascading selects](https://docs.surveycto.com/02-designing-forms/03-advanced-topics/02.cascading-selects.html) |
 | Repeated field reference inside its own repeat | A plain `${field}` reference resolves to the value in the current repeat instance when the referring expression is inside the same repeat group. | Label in same repeat: `Age of ${name}` | [Repeated data support guide](https://support.surveycto.com/hc/en-us/articles/18523141990035-Guide-to-repeated-data-part-2-Using-and-referencing-repeated-data) |
@@ -337,6 +337,15 @@ Source: [Randomizing survey elements](https://docs.surveycto.com/02-designing-fo
 | Sum all repeated values | `sum(${crop_rev})` | Use aggregate functions for all instances. |
 | List adult names | `join-if(', ', ${hh_name}, ${hh_age} >= 18)` | Expression is evaluated per repeat instance. |
 
+To show the repeat index (or any function result) in a label, you cannot write `${index()}`: `${...}` resolves a field name, not a function, so it renders nothing. Store `index()` in a `calculate` inside the repeat and reference that field:
+
+| type | name | calculation | label |
+| --- | --- | --- | --- |
+| begin repeat | visit | | |
+| calculate | visit_num | `index()` | |
+| note | visit_note | | `Visit ${visit_num}` |
+| end repeat | visit | | |
+
 ## Common Pitfalls and How to Recognize Them
 
 | Symptom | Likely cause | Fix |
@@ -349,6 +358,7 @@ Source: [Randomizing survey elements](https://docs.surveycto.com/02-designing-fo
 | Dynamic choice labels do not work with `choice-label()`. | Choices came from pre-loaded data via `search()`. | Pull the display label from the source data with `pulldata()`. |
 | Relevance on same `field-list` screen does not update after an answer. | Relevance is evaluated when the screen first displays. | Put dependent fields on later screens or restructure groups. |
 | Form throws indexed-repeat error. | Repeated field referenced outside its repeat without specifying instance/aggregate. | Use `indexed-repeat()`, `sum()`, `join()`, `count()`, etc. |
+| A label or note shows nothing where `${index()}`, `${today()}`, or `${a + b}` was written. | `${...}` resolves a field name only; it does not evaluate a function or expression inside the braces. | Put the function or expression in a `calculate` and reference that field: `calculate` `visit_num` with calculation `index()`, then `Visit ${visit_num}` in the label. |
 | Random assignment changes after editing/saving. | Used `random()` directly or nested incorrectly. | Store `once(random())` in its own calculate field and reference that field. |
 | Dynamic default is blank or stale. | Visible field's calculation ran before prerequisites existed. | Add `relevance` so the field/group appears only after prerequisites are filled. |
 | `date()` causes errors before all components are filled. | Partial or invalid constructed date string. | Guard with `if()`/`empty()` and validate year/month/day before calling `date()`. |
