@@ -99,6 +99,55 @@ metadata:
 **Skill version: X.Y.Z.** ...
 ```
 
+## When to update the version policy
+
+Skills do not auto-update and there is no separate update channel, so
+the SurveyCTO MCP server announces the current skill-version policy to
+connected agents (it serves the recommended and deprecated versions, and
+agents prompt users to update when they're behind). The editorial half
+of that policy lives in **`version-policy.source.json`**. Bumping
+`metadata.version` in `SKILL.md` alone does **not** update what the
+server broadcasts — that file is separate and must be maintained
+deliberately. See [`README.md` → Broadcasting versions through the MCP
+server](README.md#broadcasting-versions-through-the-mcp-server) for the
+end-user-facing rationale.
+
+Edit `version-policy.source.json` in the **same PR that bumps the
+version** whenever the deprecation floor or the update summary should
+change. Its fields:
+
+- **`latest_updates`** — a newest-first, human-readable list of
+  per-version summaries shown to agents. When you bump the version for a
+  content change worth surfacing to users, prepend a new
+  `"X.Y.Z: <one-line summary>"` entry. This is the field you'll touch
+  most often.
+- **`deprecated_below_version`** — the deliberate floor; versions below
+  it are announced as deprecated. Raise it only when an older release
+  becomes genuinely problematic (e.g. it produces broken forms), not on
+  every bump.
+- **`recommended_min_version`** (optional) — defaults to the released
+  version, so each release recommends itself. Set it only to pin an
+  older recommended floor than the latest.
+
+Do **not** set `latest_version` here. The release workflow derives it
+from the released tag (`metadata.version` in `SKILL.md`), and
+`scripts/build_version_policy.py` merges it with these overrides to
+produce the `version-policy.json` release asset. Underscore-prefixed
+keys (like `_comment`) are treated as comments and dropped from the
+asset.
+
+The generator validates, and the release **fails**, if the versions
+aren't internally ordered
+(`deprecated_below <= recommended_min <= latest`) or if any value isn't a
+real semantic version — so keep `deprecated_below_version` at or below
+the version you're releasing. `tests/test_version_policy.py` runs in the
+release workflow (and locally) to guard this; run it after editing
+either the source file or the generator:
+
+```bash
+python3 tests/test_version_policy.py
+```
+
 ## When to rebuild the local zip
 
 The official zips are produced by GitHub Actions, not committed.
@@ -160,6 +209,7 @@ validator before building the dev or release zip.
 | `references/` | Deep-dive reference docs the agent loads on demand. See [`README.md` → Maintaining `references/`](README.md#maintaining-references). |
 | `assets/` | Bundled templates and tools (XLSForm template, field plug-in template, field plug-in test harness, dataset validator). |
 | `surveycto-skill.zip` | Local-only test zip if you build one. Gitignored, not committed. CI builds and publishes the official release zip on push to `main`. |
+| `version-policy.source.json` | Editorial overrides for the skill-version policy the MCP server broadcasts (deprecation floor, update summaries). Merged with the release tag at release time. **Excluded from the skill zip.** |
 | `README.md` | End-user-facing install/use/maintenance docs. **Excluded from the skill zip.** |
 | `AGENTS.md` | This file. **Excluded from the skill zip.** |
 | `LICENSE` | Apache-2.0. **Excluded from the skill zip** (it's at the repo level, not the bundle level). |
@@ -203,6 +253,10 @@ validator before building the dev or release zip.
 - **Editing `assets/xlsform-template.xlsx` or another public XLSX asset** —
   run `python3 scripts/sanitize_xlsx_assets.py`, then
   `python3 tests/validate_xlsx_assets.py` before committing.
+- **Updating what the MCP server broadcasts about skill versions**
+  (`version-policy.source.json`, `scripts/build_version_policy.py`) —
+  see [*When to update the version policy*](#when-to-update-the-version-policy).
+  Run `python3 tests/test_version_policy.py` after any change.
 - **Updating MCP server reference (`references/mcp.md`)** — this is
   derived from the private `scto-assistant-be` repo, not from public
   docs. See [`README.md` → Maintaining the MCP server reference](README.md#maintaining-the-mcp-server-reference).
@@ -212,8 +266,13 @@ validator before building the dev or release zip.
 1. PR feature branch → `develop`. CI publishes a fresh
    `surveycto-skill-dev.zip` build artifact.
 2. When ready to release: bump `metadata.version` if not already done
-   on `develop`, then PR `develop` → `main`.
-3. Merge to `main`. The release workflow tags `vX.Y.Z` and attaches
-   `surveycto-skill.zip` to the GitHub Release.
+   on `develop` (and update `version-policy.source.json` in the same PR
+   if the policy should change — see [*When to update the version
+   policy*](#when-to-update-the-version-policy)), then PR `develop` →
+   `main`.
+3. Merge to `main`. The release workflow tags `vX.Y.Z`, builds
+   `version-policy.json` from the tag plus `version-policy.source.json`,
+   and attaches both `surveycto-skill.zip` and `version-policy.json` to
+   the GitHub Release.
 4. If a primer changed, sync it to the SurveyCTO MCP server's vendored
    copies (see [`README.md` → Syncing primers to the MCP server](README.md#syncing-primers-to-the-mcp-server)).
