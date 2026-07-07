@@ -1,7 +1,8 @@
 {
   "_comment": "Editorial half of the skill-version policy the MCP server broadcasts. latest_version is NOT set here; the release workflow derives it from the released tag. Edit this file in the same PR that bumps the SKILL.md version. recommended_min_version is optional and defaults to the released version (recommend latest). deprecated_below_version is the deliberate floor: versions below it are announced as deprecated. latest_updates is a newest-first, human-readable summary shown to agents. Version values use skill semver including pre-release identifiers.",
-  "deprecated_below_version": "1.0.0-beta.3",
+  "deprecated_below_version": "1.0.0-beta.7",
   "latest_updates": [
+    "1.0.0-beta.7: updated to create dataset definitions that work with older server versions, added guidance to avoid expressions within ${fieldname} references.",
     "1.0.0-beta.6: bundled dataset validator (assets/dataset-validation/validate_dataset.py) that checks a dataset definition against the server's create/edit rules and cross-checks field maps against referenced forms, with a validate-and-self-correct workflow for dataset authoring.",
     "1.0.0-beta.5: skill self-checks its version against the MCP server's published policy and prompts users to update when out of date; dataset reference standardizes on SERVER datasets with corrected dataLink element order; field plug-in test-harness fix.",
     "1.0.0-beta.4: substantially expanded MCP tool-use guidance; first-class form conversion from Kobo, ODK, CommCare, and Qualtrics; form-label translation support; XLSForm template sanitization; instance_name support.",
