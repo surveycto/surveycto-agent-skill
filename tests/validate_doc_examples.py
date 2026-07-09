@@ -111,10 +111,47 @@ def check_element_order(block: str) -> list[str]:
     return problems
 
 
+def check_publishpartialdata_framing() -> list[str]:
+    """Guard the publishPartialData framing in the dataset reference.
+
+    publishPartialData enables real-time (partial) dataset publishing, a feature
+    most servers do not yet support and reject on import. The reference must keep
+    two invariants: omit it by default (so ordinary definitions deploy anywhere),
+    and only author it as a gated exception when the user asks to enable the
+    feature and confirms their server supports it. This locks that dual-mode
+    framing so a future edit cannot reopen the door to emitting it by default,
+    nor revert to presenting it as a normal optional field to set.
+    """
+    doc = REPO_ROOT / "references" / "datasets-xml.md"
+    if not doc.exists():
+        return ["references/datasets-xml.md is missing"]
+    text = doc.read_text(encoding="utf-8")
+    problems: list[str] = []
+    forbidden = "leave it `false` or omit it"
+    if forbidden in text:
+        problems.append(
+            "datasets-xml.md still presents publishPartialData as authorable by "
+            f"default ({forbidden!r}); it must omit it by default."
+        )
+    required = {
+        "Default: OMIT it": "the default-omit guidance",
+        "Add it only to enable real-time dataset publishing": "the opt-in skeleton comment",
+        "confirms their server supports it": "the gated-enable condition",
+    }
+    for needle, what in required.items():
+        if needle not in text:
+            problems.append(
+                f"datasets-xml.md is missing {what} ({needle!r}) for publishPartialData."
+            )
+    return problems
+
+
 def main() -> int:
     errors: list[str] = []
     blocks_checked = 0
     ordered_examples_checked = 0
+
+    errors.extend(check_publishpartialdata_framing())
 
     for doc in DOC_FILES:
         if not doc.exists():
