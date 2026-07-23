@@ -826,6 +826,92 @@ def test_long_format_sibling_repeat_field_rejected():
     _expect("long-format-field-scope" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
 
 
+# ---------------------------------------------------------------------------
+# SCTO-15224: long-format relevanceField presence + dataset-field '*' by format
+# ---------------------------------------------------------------------------
+
+def _long_link(field_map: str, joining: str, relevance=None, fmt: str = "1",
+               fields: str = "id,val") -> str:
+    """Build a long-format incoming FORM dataLink. relevance=None omits the
+    <relevanceField> element entirely; relevance="" emits an empty one."""
+    rel = "" if relevance is None else f"<relevanceField>{relevance}</relevanceField>"
+    return _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        f"<fieldNames>{fields}</fieldNames><formLinks/>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType>"
+        f"<dataLinkFormat>{fmt}</dataLinkFormat><linkObjectId>f1</linkObjectId>"
+        f"<fieldMap>{field_map}</fieldMap><joiningField>{joining}</joiningField>{rel}"
+        "</dataLink></dataLinks>")
+
+
+@test
+def test_long_format_missing_relevance_field_is_error():
+    # A long-format incoming FORM link with no <relevanceField> element makes the
+    # server throw a NullPointerException the next time the linked form is
+    # uploaded (validateLongFormatPublishingRequirements -> asBase(null)).
+    fm = '[{"formField":"a_id*","datasetField":"id"}]'
+    r = _run_xml(_long_link(fm, joining="a_id*", relevance=None))
+    _expect("long-format-relevance-required" in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_long_format_empty_relevance_field_is_ok():
+    # A present-but-empty <relevanceField></relevanceField> is safe: the server
+    # stores "" and asBase("") does not throw.
+    fm = '[{"formField":"a_id*","datasetField":"id"}]'
+    r = _run_xml(_long_link(fm, joining="a_id*", relevance=""))
+    _expect("long-format-relevance-required" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_wide_format_missing_relevance_field_is_not_error():
+    # Wide format never calls the crashing validation, so a missing relevanceField
+    # must not be flagged there.
+    fm = '[{"formField":"a","datasetField":"id"}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>id</fieldNames><formLinks/>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>0</dataLinkFormat>"
+        f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap></dataLink></dataLinks>")
+    r = _run_xml(xml)
+    _expect("long-format-relevance-required" not in _codes(r, vd.ERROR), _codes(r, vd.ERROR))
+
+
+@test
+def test_long_format_dataset_field_star_flagged():
+    # In long format the datasetField carries no '*'; the console omits it and the
+    # publish path strips it. A '*' there is non-canonical.
+    fm = '[{"formField":"a_id*","datasetField":"id*"}]'
+    r = _run_xml(_long_link(fm, joining="a_id*", relevance=""))
+    _expect("fieldmap-long-dataset-suffix-extra" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_long_format_dataset_field_without_star_ok():
+    # The console-canonical shape (no '*' on the dataset field) must not be flagged.
+    fm = '[{"formField":"a_id*","datasetField":"id"}]'
+    r = _run_xml(_long_link(fm, joining="a_id*", relevance=""))
+    _expect("fieldmap-long-dataset-suffix-extra" not in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
+@test
+def test_wide_format_repeated_dataset_field_needs_star():
+    # Wide format expands a repeated field into numbered columns only when BOTH
+    # sides carry '*'. A '*' on the form field but not the dataset field publishes
+    # nothing for that field.
+    fm = '[{"formField":"a*","datasetField":"col"}]'
+    xml = _wrap(
+        "<id>x</id><title>X</title><datasetType>SERVER</datasetType>"
+        "<fieldNames>col</fieldNames><formLinks/>"
+        "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
+        "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>0</dataLinkFormat>"
+        f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap></dataLink></dataLinks>")
+    r = _run_xml(xml)
+    _expect("fieldmap-wide-dataset-suffix-missing" in _codes(r, vd.WARNING), _codes(r, vd.WARNING))
+
+
 @test
 def test_link_object_id_must_match_form_id():
     # The form declares form_id 'real_form_id'; linkObjectId uses the file stem.
@@ -947,18 +1033,23 @@ def test_cross_reference_clean_when_consistent():
         ("begin repeat", "plots"), ("text", "plot_id"), ("decimal", "area_ha"),
         ("end repeat", "plots"),
     ])
-    fm = ('[{"formField":"plot_id*","datasetField":"plot_id_key*","updateLogicAction":"REPLACE"},'
-          '{"formField":"area_ha*","datasetField":"area_ha*","updateLogicAction":"REPLACE"}]')
+    # Canonical long-format shape: '*' only on the form fields, no '*' on the
+    # dataset columns, and an empty <relevanceField> so the server does not NPE.
+    fm = ('[{"formField":"plot_id*","datasetField":"plot_id_key","updateLogicAction":"REPLACE"},'
+          '{"formField":"area_ha*","datasetField":"area_ha","updateLogicAction":"REPLACE"}]')
     xml = _wrap(
         "<id>plots</id><title>P</title><datasetType>SERVER</datasetType>"
         "<fieldNames>plot_id_key,area_ha</fieldNames><formLinks/>"
         "<dataLinks><dataLink><dataLinkClass>FORM</dataLinkClass>"
         "<dataLinkType>INCOMING</dataLinkType><dataLinkFormat>1</dataLinkFormat>"
         f"<linkObjectId>f1</linkObjectId><fieldMap>{fm}</fieldMap>"
-        "<joiningField>plot_id*</joiningField></dataLink></dataLinks>"
+        "<joiningField>plot_id*</joiningField><relevanceField></relevanceField></dataLink></dataLinks>"
         "<discriminator>DATA</discriminator><uniqueRecordField>plot_id_key</uniqueRecordField>")
     r = _run_xml(xml, forms=[form])
     _expect(not r.has_errors, f"consistent cross-reference should be clean: {_codes(r, vd.ERROR)}")
+    _expect(not (_codes(r, vd.WARNING) & {"fieldmap-long-dataset-suffix-extra",
+            "fieldmap-wide-dataset-suffix-missing"}),
+            f"canonical long-format shape should not warn: {_codes(r, vd.WARNING)}")
 
 
 # ---------------------------------------------------------------------------
