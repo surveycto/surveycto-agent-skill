@@ -1289,21 +1289,22 @@ def _validate_field_map(ds: Dataset, dl: DataLink, report: Report, loc: str) -> 
                      "from the repeat group to identify unique records.", loc)
 
     # A long-format incoming FORM link must include the <relevanceField> ELEMENT,
-    # even empty. On upload of the linked form the server runs
-    # validateLongFormatPublishingRequirements, which calls FieldInfoUtils.asBase
-    # on the relevance field with no null guard. A missing element deserializes to
-    # null and throws a NullPointerException that aborts the form upload with an
-    # opaque "consult the server logs" error; a present-but-empty
-    # <relevanceField></relevanceField> deserializes to "" and is safe. Wide-format
-    # links never reach that validation, so this applies to long format only.
+    # even empty. <relevanceField> is a long-standing schema element that the
+    # console always writes, so emitting it (empty when unused) imports cleanly on
+    # every server. Omitting it is the problem: on older servers (before the
+    # FieldInfoUtils null-safety fix in scto-commons 3.0.2 / SCTO-15201) the import
+    # succeeds, but validateLongFormatPublishingRequirements then reads the null
+    # relevance field and throws a NullPointerException that fails the next upload
+    # of the linked form. A present-but-empty <relevanceField></relevanceField>
+    # deserializes to "" and is safe everywhere. Wide-format links never reach that
+    # validation, so this applies to long format only.
     if (dl.is_long_format and dl.link_class == "FORM"
             and "relevanceField" not in dl.children):
         report.error("long-format-relevance-required",
-                     f"{loc}: this long-format link has no <relevanceField> element. When the "
-                     "linked form is next uploaded, the server throws a NullPointerException "
-                     "(it reads the relevance field without a null guard) and the form upload "
-                     "fails with an opaque error. Include an empty <relevanceField></relevanceField> "
-                     "when there is no filter.", loc,
+                     f"{loc}: this long-format link has no <relevanceField> element. The console "
+                     "always writes it (empty when unused); include it so the link imports cleanly "
+                     "on every server. Omitting it makes older servers fail the next upload of the "
+                     "linked form.", loc,
                      fix="Add <relevanceField></relevanceField> after <joiningField> (leave it empty when unused).")
 
     if any(f is None for f in form_fields) or any(d is None for d in dataset_fields):

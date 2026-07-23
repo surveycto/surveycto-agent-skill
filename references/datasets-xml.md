@@ -45,7 +45,7 @@ Forms referenced in `<formLinks>` or `<dataLinks>` must be deployed before uploa
         <linkObjectId>form_id</linkObjectId>         <!-- Required: form or file ID -->
         <fieldMap>JSON_MAPPING</fieldMap>             <!-- Optional: field-to-column mapping. Must come BEFORE joiningField -->
         <joiningField>unique_id</joiningField>       <!-- Optional: unique ID for upserts -->
-        <relevanceField>filter</relevanceField>      <!-- Publish only when =1. REQUIRED for long format (include empty when unused); see Long format publishing -->
+        <relevanceField>filter</relevanceField>      <!-- Publish only when =1. Always include for long format (empty when unused); see Long format publishing -->
         <isAutoConfigured>false</isAutoConfigured>   <!-- Optional: default false -->
         <publishPartialData>false</publishPartialData> <!-- Do NOT include by default (most servers reject it on import). Add it only to enable real-time dataset publishing on a server that supports the feature. -->
       </dataLink>
@@ -178,7 +178,7 @@ The common mistake is placing `joiningField` before `fieldMap`. That produces th
 cvc-complex-type.2.4.a: Invalid content was found starting with element 'fieldMap'. One of '{relevanceField, isAutoConfigured}' is expected.
 ```
 
-The fix is ordering only: move `fieldMap` ahead of `joiningField`. The error names `relevanceField` and `isAutoConfigured` because those are what the schema allows after `joiningField`, but neither is required by the schema. `fieldMap`, `joiningField`, `relevanceField`, `isAutoConfigured`, and `publishPartialData` are all optional in the schema; only `dataLinkClass`, `dataLinkType`, and `linkObjectId` are required. One caveat: a **long-format** link must still include the `<relevanceField>` element (empty when unused), or the server crashes on the next form upload; see [Long format publishing](#long-format-publishing).
+The fix is ordering only: move `fieldMap` ahead of `joiningField`. The error names `relevanceField` and `isAutoConfigured` because those are what the schema allows after `joiningField`, but neither is required by the schema. `fieldMap`, `joiningField`, `relevanceField`, `isAutoConfigured`, and `publishPartialData` are all optional in the schema; only `dataLinkClass`, `dataLinkType`, and `linkObjectId` are required. One caveat: for a **long-format** link, include the `<relevanceField>` element (empty when unused), as the console does; see [Long format publishing](#long-format-publishing).
 
 ## Long format publishing
 
@@ -221,7 +221,7 @@ Naming rules for long format, all of which the example above follows:
 - **`joiningField`**: the form field that identifies a unique record, written as the form field name with the `*` suffix (`plot_id*`). It identifies which repeated rows are distinct.
 - **`uniqueRecordField`**: the **dataset column** that the joining field publishes into, with no `*` (`plot_id_key`). It must be one of the names in `<fieldNames>`. Do **not** use the bare form-field name (`plot_id`) here: for a new dataset the server rejects a `uniqueRecordField` that is not an existing column with `Sorry, the field "..." doesn't exist in the dataset`. Because the joining field maps `plot_id*` into `plot_id_key`, naming the column `plot_id_key` here also satisfies the rule that the joining field must merge on the unique record column.
 - **Repeated fields** carry `*` on the `formField` only. The `datasetField` takes **no** `*` in long format (each repeat instance is its own row in a single column). This is the opposite of wide format, where the `datasetField` also carries the `*` to expand into numbered columns. See [Repeated fields](#repeated-fields).
-- **`relevanceField`**: include the `<relevanceField>` element even when there is no filter (leave it empty: `<relevanceField></relevanceField>`). It is optional in the schema, but a long-format link that omits the element makes the server throw a NullPointerException the next time the linked form is uploaded (the server reads the relevance field without a null guard), which fails the form upload with an opaque "consult the server logs" error. An empty element is stored as a blank filter and is safe.
+- **`relevanceField`**: include the `<relevanceField>` element even when there is no filter (leave it empty: `<relevanceField></relevanceField>`). It is a long-standing schema element that the console always writes, so including it imports cleanly on every server. An empty element is stored as a blank filter.
 - **Dataset column names are your choice.** The example names the lookup column `plot_id_key`: the `_key` suffix is an indexing convention, not a long-format requirement. Columns whose names end in `_key` are automatically indexed on client (device) datasets to speed up `search()` and `pulldata()` lookups. It does not affect whether publishing succeeds, so do not treat `_key` as a rule the way the joining-field and `*` conventions are.
 
 The server enforces these structural rules; the field selection must satisfy them or the upload is rejected:
@@ -230,7 +230,7 @@ The server enforces these structural rules; the field selection must satisfy the
 2. The joining field must exist in the form and be inside a repeat group.
 3. Every other published field (and the `relevanceField`, if used) must be in the same repeat instance as the joining field, in a parent group, or outside all groups. A field from a different, sibling repeat group does not qualify.
 
-The `<relevanceField>` element itself must be present (empty is fine). Unlike the rules above, omitting the element does not fail the dataset upload: the dataset imports, but the server then throws a NullPointerException the next time the linked form is uploaded, and that form upload fails with an opaque "consult the server logs" error. Always write `<relevanceField></relevanceField>` in a long-format link when there is no filter.
+Include the `<relevanceField>` element even when empty. It is a long-standing part of the dataset schema and the console always writes it, so adding it imports cleanly on every server.
 
 ## Common modifications
 
