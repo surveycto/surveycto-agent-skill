@@ -45,7 +45,7 @@ Forms referenced in `<formLinks>` or `<dataLinks>` must be deployed before uploa
         <linkObjectId>form_id</linkObjectId>         <!-- Required: form or file ID -->
         <fieldMap>JSON_MAPPING</fieldMap>             <!-- Optional: field-to-column mapping. Must come BEFORE joiningField -->
         <joiningField>unique_id</joiningField>       <!-- Optional: unique ID for upserts -->
-        <relevanceField>filter</relevanceField>      <!-- Optional: publish only when =1 -->
+        <relevanceField>filter</relevanceField>      <!-- Publish only when =1. Always include for long format (empty when unused); see Long format publishing -->
         <isAutoConfigured>false</isAutoConfigured>   <!-- Optional: default false -->
         <publishPartialData>false</publishPartialData> <!-- Do NOT include by default (most servers reject it on import). Add it only to enable real-time dataset publishing on a server that supports the feature. -->
       </dataLink>
@@ -154,10 +154,12 @@ For `CONCATENATE_TO_TEXT`, set `updateLogicOptions`:
 
 ### Repeated fields
 
-Fields inside a repeat group use a `*` suffix on **both sides** of the field map entry:
-- `"formField": "field*"` maps to `"datasetField": "column*"`
+A field inside a repeat group takes a `*` suffix on its `formField`. Whether the `datasetField` also takes a `*` depends on the publishing format:
 
-The `*` is required whether you publish in wide format or long format. What differs between the two formats is how those repeated fields land in the dataset; see [Long format publishing](#long-format-publishing).
+- **Wide format** (`dataLinkFormat` 0): the `*` goes on **both sides** (`"formField": "field*"` maps to `"datasetField": "column*"`). The `*` on the dataset side is what expands the repeat into numbered columns (`column_1`, `column_2`, ...); a repeated field mapped to a `datasetField` without the `*` publishes nothing.
+- **Long format** (`dataLinkFormat` 1): the `*` goes on the `formField` **only** (`"formField": "field*"` maps to `"datasetField": "column"`, no `*`). Each repeat instance becomes its own row in a single dataset column, so the column name carries no `*`. This is what the server console produces; a `*` on the dataset side is non-canonical here (the publishing engine strips it), so do not emit it.
+
+See [Long format publishing](#long-format-publishing) for the full long-format rules.
 
 ### fieldMap gotchas
 
@@ -176,7 +178,7 @@ The common mistake is placing `joiningField` before `fieldMap`. That produces th
 cvc-complex-type.2.4.a: Invalid content was found starting with element 'fieldMap'. One of '{relevanceField, isAutoConfigured}' is expected.
 ```
 
-The fix is ordering only: move `fieldMap` ahead of `joiningField`. The error names `relevanceField` and `isAutoConfigured` because those are what the schema allows after `joiningField`, but neither is required. `fieldMap`, `joiningField`, `relevanceField`, `isAutoConfigured`, and `publishPartialData` are all optional; only `dataLinkClass`, `dataLinkType`, and `linkObjectId` are required.
+The fix is ordering only: move `fieldMap` ahead of `joiningField`. The error names `relevanceField` and `isAutoConfigured` because those are what the schema allows after `joiningField`, but neither is required by the schema. `fieldMap`, `joiningField`, `relevanceField`, `isAutoConfigured`, and `publishPartialData` are all optional in the schema; only `dataLinkClass`, `dataLinkType`, and `linkObjectId` are required. One caveat: for a **long-format** link, include the `<relevanceField>` element (empty when unused), as the console does; see [Long format publishing](#long-format-publishing).
 
 ## Long format publishing
 
@@ -198,8 +200,9 @@ Use this when a form has a repeat group and the user wants one dataset row per r
         <dataLinkType>INCOMING</dataLinkType>
         <dataLinkFormat>1</dataLinkFormat>
         <linkObjectId>plot_measurement_form</linkObjectId>
-        <fieldMap>[{"formField":"plot_id*","datasetField":"plot_id_key*","updateLogicAction":"REPLACE","updateLogicOptions":null},{"formField":"area_ha*","datasetField":"area_ha*","updateLogicAction":"REPLACE","updateLogicOptions":null},{"formField":"crop_type*","datasetField":"crop_type*","updateLogicAction":"REPLACE","updateLogicOptions":null}]</fieldMap>
+        <fieldMap>[{"formField":"plot_id*","datasetField":"plot_id_key","updateLogicAction":"REPLACE","updateLogicOptions":null},{"formField":"area_ha*","datasetField":"area_ha","updateLogicAction":"REPLACE","updateLogicOptions":null},{"formField":"crop_type*","datasetField":"crop_type","updateLogicAction":"REPLACE","updateLogicOptions":null}]</fieldMap>
         <joiningField>plot_id*</joiningField>
+        <relevanceField></relevanceField>
         <isAutoConfigured>false</isAutoConfigured>
       </dataLink>
     </dataLinks>
@@ -216,8 +219,9 @@ Use this when a form has a repeat group and the user wants one dataset row per r
 Naming rules for long format, all of which the example above follows:
 
 - **`joiningField`**: the form field that identifies a unique record, written as the form field name with the `*` suffix (`plot_id*`). It identifies which repeated rows are distinct.
-- **`uniqueRecordField`**: the **dataset column** that the joining field publishes into, with no `*` (`plot_id_key`). It must be one of the names in `<fieldNames>`. Do **not** use the bare form-field name (`plot_id`) here: for a new dataset the server rejects a `uniqueRecordField` that is not an existing column with `Sorry, the field "..." doesn't exist in the dataset`. Because the joining field maps `plot_id*` into `plot_id_key*`, naming the column `plot_id_key` here also satisfies the rule that the joining field must merge on the unique record column.
-- **All repeated fields** carry `*` on both `formField` and `datasetField`, as in wide format.
+- **`uniqueRecordField`**: the **dataset column** that the joining field publishes into, with no `*` (`plot_id_key`). It must be one of the names in `<fieldNames>`. Do **not** use the bare form-field name (`plot_id`) here: for a new dataset the server rejects a `uniqueRecordField` that is not an existing column with `Sorry, the field "..." doesn't exist in the dataset`. Because the joining field maps `plot_id*` into `plot_id_key`, naming the column `plot_id_key` here also satisfies the rule that the joining field must merge on the unique record column.
+- **Repeated fields** carry `*` on the `formField` only. The `datasetField` takes **no** `*` in long format (each repeat instance is its own row in a single column). This is the opposite of wide format, where the `datasetField` also carries the `*` to expand into numbered columns. See [Repeated fields](#repeated-fields).
+- **`relevanceField`**: include the `<relevanceField>` element even when there is no filter (leave it empty: `<relevanceField></relevanceField>`). It is a long-standing schema element that the console always writes, so including it imports cleanly on every server. An empty element is stored as a blank filter.
 - **Dataset column names are your choice.** The example names the lookup column `plot_id_key`: the `_key` suffix is an indexing convention, not a long-format requirement. Columns whose names end in `_key` are automatically indexed on client (device) datasets to speed up `search()` and `pulldata()` lookups. It does not affect whether publishing succeeds, so do not treat `_key` as a rule the way the joining-field and `*` conventions are.
 
 The server enforces these structural rules; the field selection must satisfy them or the upload is rejected:
@@ -225,6 +229,8 @@ The server enforces these structural rules; the field selection must satisfy the
 1. A `joiningField` is required for long format.
 2. The joining field must exist in the form and be inside a repeat group.
 3. Every other published field (and the `relevanceField`, if used) must be in the same repeat instance as the joining field, in a parent group, or outside all groups. A field from a different, sibling repeat group does not qualify.
+
+Include the `<relevanceField>` element even when empty. It is a long-standing part of the dataset schema and the console always writes it, so adding it imports cleanly on every server.
 
 ## Common modifications
 
@@ -272,7 +278,7 @@ The server infers the discriminator from the option blocks present: `<caseManage
 
 These are real behaviors the server applies that are easy to miss when authoring by hand:
 
-- **Publishable fields.** Only data-bearing form fields can be published into a dataset. Notes are not publishable. `select_multiple` publishes as one field (a space-separated value), not one column per choice. A `geopoint` publishes as a single field; its derived `-Latitude`/`-Longitude`/`-Altitude`/`-Accuracy` columns are not separately publishable. `geoshape`, `geotrace`, and `barcode` publish as single string fields. Fields inside a repeat group carry the `*` suffix in the field map.
+- **Publishable fields.** Only data-bearing form fields can be published into a dataset. Notes are not publishable. `select_multiple` publishes as one field (a space-separated value), not one column per choice. A `geopoint` publishes as a single field; its derived `-Latitude`/`-Longitude`/`-Altitude`/`-Accuracy` columns are not separately publishable. `geoshape`, `geotrace`, and `barcode` publish as single string fields. Fields inside a repeat group carry the `*` suffix on the `formField` (and, in wide format only, on the `datasetField`); see [Repeated fields](#repeated-fields).
 - **Always-available metadata sources.** `SubmissionDate`, `formdef_version`, `review_quality`, and `KEY` are always available as field-map sources even though they are not survey rows. `formdef_id`, `review_status`, `instanceID`, and `instanceName` are not part of the incoming form-to-dataset feed; do not rely on them as publishing sources.
 - **Cases virtual columns.** `scto_saved_count` and `scto_sent_count` are valid entries in `<showColumnsWhenTable>` but must not appear in `<fieldNames>` (the server maintains them).
 - **`entryMode` default.** When `<enumeratorDatasetId>` is set on a cases dataset and `<entryMode>` is omitted, the server defaults `entryMode` to `LIST`.

@@ -40,7 +40,7 @@ Claude Cowork has a UI for both pieces.
 
    See [`references/install.md`](references/install.md) for the full walkthrough and for troubleshooting if uploads start failing mid-session.
 
-Tip: go into your Claude billing settings and enable extra usage so that your agent can continue working even after you've hit your subscription-level usage quota.
+Tip: go into your Claude usage settings and enable extra usage so that your agent can continue working even after you've hit your subscription-level usage quota.
 
 ### OpenAI Codex
 
