@@ -82,9 +82,17 @@ FieldMapEntry = tuple[Optional[str], Optional[str], str]
 #       standard column sets, max field-name length, reserved "rowId".
 #   - XFormManagerImpl.java: scto-server .../forms/manager/
 #       long-format publishing requirements and the publishing field list.
+#       validateLongFormatPublishingRequirements calls FieldInfoUtils.asBase on the
+#       relevance field with no null guard, so a long-format link missing the
+#       <relevanceField> element (deserialized to null) NPEs on the next form upload.
+#   - DataUtilsLongFormat.java / DataUtilsWideFormat.java: scto-commons-utils
+#       .../datasets/: long format strips the '*' from both sides (removeWildcards),
+#       so the datasetField carries no '*'; wide format expands a repeat into
+#       numbered columns only when BOTH sides carry '*'.
 #   - DatasetUtils.java / ServerConstants.java: standard column constants.
 # Ticket coverage: SCTO-15028 (enumerator columns), SCTO-15073 (joiningField in
-# field map), SCTO-15074 (same field mapped twice).
+# field map), SCTO-15074 (same field mapped twice), SCTO-15224 (long-format
+# relevanceField element required; '*' on the dataset field by format).
 # ---------------------------------------------------------------------------
 
 # Element order enforced by the XSD xs:sequence for <definition> and <dataLink>.
@@ -1280,6 +1288,25 @@ def _validate_field_map(ds: Dataset, dl: DataLink, report: Report, loc: str) -> 
                      f"{loc}: long-format publishing (dataLinkFormat 1) requires a <joiningField> "
                      "from the repeat group to identify unique records.", loc)
 
+    # A long-format incoming FORM link must include the <relevanceField> ELEMENT,
+    # even empty. <relevanceField> is a long-standing schema element that the
+    # console always writes, so emitting it (empty when unused) imports cleanly on
+    # every server. Omitting it is the problem: on older servers (before the
+    # FieldInfoUtils null-safety fix in scto-commons 3.0.2 / SCTO-15201) the import
+    # succeeds, but validateLongFormatPublishingRequirements then reads the null
+    # relevance field and throws a NullPointerException that fails the next upload
+    # of the linked form. A present-but-empty <relevanceField></relevanceField>
+    # deserializes to "" and is safe everywhere. Wide-format links never reach that
+    # validation, so this applies to long format only.
+    if (dl.is_long_format and dl.link_class == "FORM"
+            and "relevanceField" not in dl.children):
+        report.error("long-format-relevance-required",
+                     f"{loc}: this long-format link has no <relevanceField> element. The console "
+                     "always writes it (empty when unused); include it so the link imports cleanly "
+                     "on every server. Omitting it makes older servers fail the next upload of the "
+                     "linked form.", loc,
+                     fix="Add <relevanceField></relevanceField> after <joiningField> (leave it empty when unused).")
+
     if any(f is None for f in form_fields) or any(d is None for d in dataset_fields):
         report.error("fieldmap-shape",
                      f"{loc}: every field map entry needs a string form field and a string "
@@ -1299,6 +1326,34 @@ def _validate_field_map(ds: Dataset, dl: DataLink, report: Report, loc: str) -> 
             report.error("fieldmap-dataset-field-too-long",
                          f"{loc}: dataset field names cannot be longer than "
                          f"{MAX_FIELD_NAME_LENGTH} characters. Conflicting field: {df_base!r}.", loc)
+
+    # Repeat-suffix ('*') rules between the form field, the dataset field, and the
+    # publishing format. The '*' marks a field inside a repeat group.
+    #   - Long format writes one dataset row per repeat instance into a single
+    #     column, so the datasetField carries NO '*': the console omits it and the
+    #     publish path strips it (DataUtilsLongFormat.removeWildcards). A '*' here is
+    #     non-canonical.
+    #   - Wide format expands a repeated field into numbered dataset columns, which
+    #     the server does only when the datasetField carries a matching '*'
+    #     (DataUtilsWideFormat expands only when both sides are repeated); a repeated
+    #     formField mapped to a datasetField without '*' publishes nothing.
+    for ff, df, _a in field_map:
+        if ff is None or df is None:
+            continue
+        ff_star = ff.endswith("*")
+        df_star = df.endswith("*")
+        if dl.is_long_format and df_star:
+            report.warning("fieldmap-long-dataset-suffix-extra",
+                           f"{loc}: the dataset field {df!r} has a '*' suffix, but a long-format "
+                           "link takes no '*' on the dataset field (one row per repeat instance, a "
+                           f"single column). Keep the '*' on the form field {ff!r} and remove it "
+                           "from the dataset field to match what the console produces.", loc)
+        elif not dl.is_long_format and ff_star and not df_star:
+            report.warning("fieldmap-wide-dataset-suffix-missing",
+                           f"{loc}: {ff!r} is a repeated field but its dataset field {df!r} has no "
+                           "'*'. In wide format the '*' must be on both the form field and the "
+                           "dataset field to expand the repeat into numbered columns; without it "
+                           "this field publishes nothing.", loc)
 
     # updateLogicAction enum.
     for ff, _df, action in field_map:
@@ -1437,8 +1492,9 @@ def _cross_reference_form(ds: Dataset, dl: DataLink, form_fields: list,
             continue
         if field.repeated and not ff.endswith("*"):
             report.error("fieldmap-repeat-suffix-missing",
-                         f"{loc}: {base!r} is inside a repeat group in the form, so it must carry "
-                         "a '*' suffix on both formField and datasetField.", loc)
+                         f"{loc}: {base!r} is inside a repeat group in the form, so its form field "
+                         "must carry a '*' suffix (in wide format the dataset field carries a "
+                         "matching '*' too; in long format the dataset field has no '*').", loc)
         if not field.repeated and ff.endswith("*"):
             if dl.is_long_format:
                 # The server strips wildcards in long format, so this is not a
