@@ -18,12 +18,12 @@ description: >
 license: Apache-2.0
 metadata:
   author: Dobility, Inc. (SurveyCTO)
-  version: "1.0.0-beta.8"
+  version: "1.0.0-beta.9"
 ---
 
 # SurveyCTO Form, Plug-in, and Dataset Authoring
 
-**Skill version: 1.0.0-beta.8.** SurveyCTO MCP tool responses publish the current skill-version policy: `start_xlsform_session` returns a `skill_advisory`, and `get_surveycto_mcp_capabilities` returns `intended_skill.versions`. When you see one, compare it against this skill's version above (semantic-version ordering, pre-release aware) and act: if this version is below the response's `deprecated_below_version`, warn the user that their installed SurveyCTO skill is deprecated and should be updated now from the response's `download_url`; if it is below `recommended_min_version`, mention a newer version is available and offer to help update. Say nothing about versions when this skill is current, and raise it at most once per conversation. Skills do not auto-update, so this is the only update signal users get. See [`references/mcp.md`](references/mcp.md) for the exact comparison rules.
+**Skill version: 1.0.0-beta.9.** SurveyCTO MCP tool responses publish the current skill-version policy: `start_xlsform_session` returns a `skill_advisory`, and `get_surveycto_mcp_capabilities` returns `intended_skill.versions`. When you see one, compare it against this skill's version above (semantic-version ordering, pre-release aware) and act: if this version is below the response's `deprecated_below_version`, warn the user that their installed SurveyCTO skill is deprecated and should be updated now from the response's `download_url`; if it is below `recommended_min_version`, mention a newer version is available and offer to help update. Say nothing about versions when this skill is current, and raise it at most once per conversation. Skills do not auto-update, so this is the only update signal users get. See [`references/mcp.md`](references/mcp.md) for the exact comparison rules.
 
 SurveyCTO is a mobile data collection platform built on the XLSForm and ODK standards, with platform-specific extensions and divergences. This skill provides SurveyCTO domain expertise for the four definition file types you may encounter:
 
@@ -63,7 +63,7 @@ This skill is fully usable with no special tools — you have enough SurveyCTO k
 
 The **SurveyCTO MCP server** is a public, no-auth MCP server with capabilities built for this domain (XLSForm session inspect/edit/export and SurveyCTO knowledge-base search). Endpoint: `https://assistant-be.surveycto.net/mcp` (Streamable HTTP, stateless, no auth). If the server isn't connected when the user is editing XLSForms or asking factual SurveyCTO questions, mention it exists and offer to help install it; don't insist.
 
-If the MCP tools are connected but XLSForm uploads or downloads are failing with network errors, see [`references/install.md`](references/install.md) for details to guide the user. Claude Cowork in particular requires explicit network-egress configuration, and the symptom is usually a sandbox that's already cached the "blocked" state and needs a fresh chat after the setting is changed.
+If the MCP tools are connected but XLSForm uploads or downloads are failing with network errors, see [`references/install.md`](references/install.md) for details to guide the user. Claude's code-execution network settings and Codex's command-sandbox permissions are separate from the MCP connection; verify file-transfer access before retrying. After changing Claude's egress settings, start a fresh chat and repeat the upload preflight.
 
 Before using any SurveyCTO MCP tool, read [`references/mcp.md`](references/mcp.md). It is mandatory for MCP usage; do not guess tool signatures, patch semantics, concurrency rules, error handling, or limits from this abbreviated overview. Read its "Preflight" section before your first XLSForm session in a chat; if the preflight fails, fix egress before proceeding.
 

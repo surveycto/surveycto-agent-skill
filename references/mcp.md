@@ -35,7 +35,7 @@ In agent environments where tools must be loaded or selected before use, search/
 
 ## Preflight: verify upload egress before real work
 
-The XLSForm session tools depend on outbound HTTPS to `assistant-be.surveycto.net` for both upload and download of XLSForm files with `curl`. In hosted sandboxes — most notably **Claude Cowork** — this egress is blocked by default and must be allowlisted by the user. Without it you can still call tools that don't transfer files (`get_surveycto_mcp_capabilities`, `kb_search`, `get_surveycto_primer`), but you cannot upload a workbook — which means you cannot meaningfully edit XLSForms.
+The XLSForm session tools depend on outbound HTTPS to `assistant-be.surveycto.net` for both upload and download of XLSForm files with `curl`. Agent sandboxes can restrict this traffic independently of the MCP connection. In **Claude**, check code-execution network egress; in **Codex**, check command-sandbox network permissions. With file-transfer egress blocked, you can still call tools that don't transfer files (`get_surveycto_mcp_capabilities`, `kb_search`, `get_surveycto_primer`), but you cannot upload a workbook — which means you cannot meaningfully edit XLSForms.
 
 **Before doing XLSForm work, run a one-shot upload check:**
 
@@ -47,7 +47,7 @@ If the upload fails with a network error, **stop and resolve egress before conti
 
 - Working MCP upload/download is effectively required for usable XLSForm editing — the fallbacks below are substantially worse and likely to frustrate.
 - If the SurveyCTO MCP server isn't installed yet, install it.
-- If it's installed but egress is blocked, follow [`install.md`](install.md) in this skill (look for "Network egress") to allow outbound HTTPS to `*.surveycto.net`. In Cowork, the user might then need to **start a new chat** — egress changes don't reliably apply to in-progress chats.
+- If it's installed but egress is blocked, follow [`install.md`](install.md) in this skill (look for "Network egress") to allow outbound HTTPS to `*.surveycto.net`. After changing Claude's egress settings, **start a new chat** and repeat the preflight.
 
 Only proceed with the fallbacks below if the user has explicitly chosen to continue without working MCP egress and accepts a degraded experience.
 
@@ -82,7 +82,7 @@ The server is the only channel that announces new skill releases, because skills
 - `start_xlsform_session` → `skill_advisory` with `latest_version`, `recommended_min_version`, `deprecated_below_version`, `download_url`, and a `note`.
 - `get_surveycto_mcp_capabilities` → `intended_skill.versions` (same three version fields), `intended_skill.download_url`, and `intended_skill.latest_updates`.
 
-When you see either, compare this skill's own version (the **Skill version** stated at the top of `SKILL.md`, currently `1.0.0-beta.4`) against those values and act:
+When you see either, compare this skill's own version (the **Skill version** stated at the top of `SKILL.md`) against those values and act:
 
 1. **Below `deprecated_below_version`** → tell the user their installed SurveyCTO skill is deprecated and should be updated now, and give the `download_url`. Deprecated versions predate reliability fixes and may misbehave.
 2. **Below `recommended_min_version` (but not deprecated)** → mention that a newer skill version is available and offer to help update, with the `download_url`.

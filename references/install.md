@@ -13,45 +13,93 @@ For the best experience, install both:
 
 The skill works on its own, but without the MCP server (or without working network access to it) the agent cannot reliably edit XLSForm files. See [Why the MCP server matters](#why-the-mcp-server-matters) below.
 
-## Claude Cowork
 
-1. Open the sidebar and click **Customize**.
-2. Click **Create skill… → Upload a skill** and upload `surveycto-skill.zip`.
-3. Click into **Connectors** and then **Add custom connector**.
-4. Enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
-5. Once the connector is added, click **Always allow** for each of the SurveyCTO tools.
-6. **Configure network egress** — see [Network egress (Cowork)](#network-egress-cowork) immediately below. This step is required and is the most common reason the skill appears installed but then fails to upload or download XLSForms.
 
-Tip: in Claude billing settings, enable extra usage so the agent can keep working past your subscription-level usage quota.
+## Claude (formerly Cowork)
 
-### Network egress (Cowork)
+[Anthropic has brought Cowork into Claude](https://claude.com/blog/cowork-is-now-claude), so you can use the skill in a normal Claude conversation without selecting a separate Cowork tab. The steps and screenshots below show the integrated interface in October 2026. Availability and labels can vary by account and rollout; update the desktop app if your interface differs. You need access to skills, custom connectors, and code execution; organization settings may restrict these features.
 
-Claude Cowork runs skills inside a sandboxed code-execution environment that blocks outbound network access by default. The SurveyCTO MCP server's XLSForm tools rely on `curl` uploads and HTTPS downloads to `assistant-be.surveycto.net`, so you must explicitly allow that traffic before the agent can move XLSForm bytes.
+### Install the skill
 
-**Configure this once, before your first SurveyCTO chat:**
+1. Download [surveycto-skill.zip](https://github.com/surveycto/surveycto-agent-skill/releases/latest/download/surveycto-skill.zip).
+2. Open **Customize** in Claude's sidebar, then select **Skills**. You may also find **Skills** at the **Settings** menu if you use the search bar.
+3. Click **Add → Upload skill**.
+  ![Claude Customize with Skills selected, the Add button at upper right, and an existing SurveyCTO skill under Yours](../assets/install/claude-skills.jpg)
+4. Drop the zip into the upload area, or click to browse for it. Review the skill preview, then click **Upload** to start the security scan. Wait for it to finish and follow any scan prompts.
+  ![Claude Upload a skill page with the zip file drop area](../assets/install/claude-upload-skill.jpg)
+5. Confirm **surveycto** appears under **Yours** and is enabled. If Claude asks you to enable code execution, use **Settings → Capabilities → Cloud code execution and file creation**.
+
+Some versions put **Upload a skill** inside **Create skill** instead. See [Claude's skills guide](https://support.claude.com/en/articles/12512180-use-skills-in-claude) for account-specific requirements.
+
+### Connect the SurveyCTO tools
+
+1. Under **Customize → Connectors**, click **Add → Add custom connector**. If your menu instead shows **Custom**, select **Web** for a remote MCP server.
+2. Enter **SurveyCTO tools** as the name and `https://assistant-be.surveycto.net/mcp` as the **MCP server URL**, then click **Continue**.
+  ![Add custom connector with SurveyCTO tools and the SurveyCTO MCP server URL entered](../assets/install/claude-connector-url.jpg)
+3. Leave authentication set to **No sign-in** and click **Add** at the bottom of the dialog (scroll down if needed). This public server does not require a SurveyCTO username, password, API key, or custom request headers.
+  ![Claude detects No sign-in for the SurveyCTO connector](../assets/install/claude-connector-auth.jpg)
+4. On the **SurveyCTO tools** page, click **Connect** if shown. Once connected, choose its **Tool permissions**. **Always allow** approves this connector's tool calls automatically. Choose **Needs approval** if you prefer to approve calls, or **Custom** to set permissions per tool. Other kinds of actions may still require approval.
+  ![Connected SurveyCTO tools with Needs approval selected for the tool group and each tool](../assets/install/claude-tool-permissions.jpg)
+
+For more about these options, see [Claude's connectors guide](https://support.claude.com/en/articles/11176164-use-connectors-to-extend-claude-s-capabilities).
+
+
+
+### Network egress (Claude)
+
+Connecting the MCP server and allowing file transfers are separate steps. Claude's code-execution environment needs outbound HTTPS to `assistant-be.surveycto.net` to upload and download XLSForm files, even when the connector's other tools already work.
 
 1. Open **Settings → Capabilities**.
-2. Confirm **Cloud code execution and file creation** is on (required for skills in general).
+2. Confirm **Cloud code execution and file creation** is on (required for skills).
 3. Turn on **Allow network egress**.
-4. Under **Domain allowlist**, either select **All domains** or keep **Package managers only** and add `*.surveycto.net` to **Additional allowed domains**.
-5. **Start a new chat.** Egress changes do not reliably take effect for chats that are already in progress — the sandbox state for an in-flight session is sticky, and the agent can keep hitting network errors for the rest of that chat even after the setting is enabled.
+4. Under **Domain allowlist**, keep **Package managers only**, enter `*.surveycto.net` under **Additional allowed domains**, and click **Add**. Confirm the domain appears in the list. If **All domains** is already selected, SurveyCTO is covered.
+  ![Claude Capabilities with code execution and network egress enabled; this account already allows All domains](../assets/install/claude-network-egress.jpg)
+5. Start a new chat and check the setup below. If these settings are managed by your organization, ask your administrator to enable the required access.
+
+### Check the setup
+
+In a new Claude conversation, open **+ → Connectors** (or type `/` to open the menu) and ensure **SurveyCTO tools** is enabled for that conversation. Then ask:
+
+> Using the SurveyCTO skill, report the skill version and call get_surveycto_mcp_capabilities. Upload the bundled XLSForm template into a temporary MCP session, export the unchanged workbook, and download it to a new local file using the returned download URL. Confirm both transfers succeeded, then end the temporary session.
+
+Confirm the skill loaded and both file transfers succeeded. A successful capabilities call alone does not verify file-transfer access. You can then attach your form and ask Claude to work on it.
 
 ## OpenAI Codex
 
-Codex doesn't (as of this writing) have a UI for managing skills, so install the skill by unzipping into `~/.agents/skills/surveycto`:
+### Install the skill
+
+Extract the downloaded zip into the user skills directory. On macOS or Linux, run these commands from the directory containing `surveycto-skill.zip`:
 
 ```bash
 mkdir -p ~/.agents/skills/surveycto
 unzip surveycto-skill.zip -d ~/.agents/skills/surveycto
 ```
 
-Codex does have a UI for MCP servers:
+The result must include `~/.agents/skills/surveycto/SKILL.md`, without an extra nested folder. On Windows, extract into `.agents/skills/surveycto` under your user home directory.
 
-1. Open Codex settings and click **MCP servers**.
-2. Click **+ Add server**, then enter `https://assistant-be.surveycto.net/mcp` as the server address and **SurveyCTO tools** as the name.
-3. If SurveyCTO capabilities don't appear in new chats, restart Codex.
+Codex discovers skills in `~/.agents/skills`. The desktop app also has a **Skills** view; the CLI and IDE extension let you list skills with `/skills` and invoke one with `$surveycto`. If the new skill does not appear, restart the app or session. See [OpenAI's skills guide](https://developers.openai.com/codex/skills/) for the interface available in your client.
 
-Codex prompts for permission on every tool call. Select **Always allow** in those prompts to permanently approve each tool. Codex does not sandbox network egress separately from the host machine, so no extra egress configuration is needed once the user has approved the tool.
+### Connect the SurveyCTO tools
+
+In the desktop app:
+
+1. Open **Settings → MCP servers → Add server**.
+2. Use `surveycto` as the name, select **Streamable HTTP**, and enter `https://assistant-be.surveycto.net/mcp` as the URL. Leave authentication and custom headers unset.
+3. Save the server and restart the app when prompted. Confirm the server is enabled.
+
+Alternatively, configure it with the Codex CLI:
+
+```bash
+codex mcp add surveycto --url https://assistant-be.surveycto.net/mcp
+```
+
+OpenAI's [MCP setup guide](https://developers.openai.com/codex/mcp/) covers the desktop app, CLI, and IDE extension. Current OpenAI documentation may refer to the desktop client as the ChatGPT desktop app.
+
+### Permissions and network access
+
+Approval prompts depend on your client and policy. Approve SurveyCTO tool calls as needed. Codex can also restrict network access for commands such as `curl`: an enabled MCP server does not automatically authorize XLSForm uploads and downloads from the command sandbox. If a transfer is blocked, approve the requested network access to `assistant-be.surveycto.net` or ask your administrator to allow it under your organization's policy. See [OpenAI's approvals and security guide](https://learn.chatgpt.com/docs/agent-approvals-security).
+
+Use the prompt in [Check the setup](#check-the-setup) in a new Codex session before working on a form; the Claude connector-menu step does not apply to Codex.
 
 ## Other Agent Skills-compatible hosts
 
@@ -59,7 +107,6 @@ This skill follows the [Agent Skills](https://agentskills.io) open standard. For
 
 - **Skill**: extract `surveycto-skill.zip` into the host's skills directory (often `~/.<host>/skills/surveycto` or similar).
 - **MCP server**: register `https://assistant-be.surveycto.net/mcp` (Streamable HTTP, no auth). For stdio-only clients, wrap with `mcp-remote`:
-
   ```json
   {
     "surveycto": {
@@ -68,7 +115,6 @@ This skill follows the [Agent Skills](https://agentskills.io) open standard. For
     }
   }
   ```
-
 - **Network access**: if your host sandboxes skill execution, ensure outbound HTTPS to `*.surveycto.net` (or at minimum `assistant-be.surveycto.net`) is allowed. Hosts that run skills directly on your machine typically just prompt for permission on the first `curl` and need no separate egress configuration.
 
 ## Why the MCP server matters
@@ -83,7 +129,7 @@ If you want a smooth experience, install the MCP server *and* unblock egress bef
 
 ### "The agent uploaded fine the first time but now everything is failing"
 
-Most likely a Cowork sandbox state issue. Egress changes don't always apply to in-progress chats. Verify egress is configured (see [Network egress (Cowork)](#network-egress-cowork)), then, if necessary, **start a new chat**.
+Check the underlying error before retrying. Verify [network egress](#network-egress-claude) and, if you changed the settings during a Claude conversation, **start a new chat** and repeat the upload preflight.
 
 ### "Network egress is on and the domain is allowed, but uploads still fail"
 
@@ -93,9 +139,9 @@ Most likely a Cowork sandbox state issue. Egress changes don't always apply to i
 
 ### "The MCP tools aren't showing up at all"
 
-- In Cowork: confirm the connector was added under **Connectors** and that each SurveyCTO tool shows **Always allow**.
+- In Claude: confirm the connector appears under **Customize → Connectors**, is enabled in the conversation's **+ → Connectors** menu, and its tool permissions are not **Blocked**.
 - In Codex or stdio clients: restart the host after adding the server.
-- In any host: ask the agent to call `get_surveycto_mcp_capabilities` — if that fails, the MCP server isn't reachable from the host at all.
+- In any host: ask the agent to call `get_surveycto_mcp_capabilities` — if that fails, check the connector status, permissions, and reported error before troubleshooting file uploads.
 
 ### "The agent is editing XLSForms with `openpyxl` instead of MCP tools"
 
